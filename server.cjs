@@ -308,6 +308,24 @@ io.on('connection', (socket) => {
       }
     });
 
+    client.on('message', async (msg) => {
+        // Explicitly handle 'message' event for redundancy
+        // (Usually message_create covers this, but for some versions/contexts 'message' is more reliable for incoming)
+        if (msg.fromMe) return; // message_create handles fromMe, 'message' is usually only incoming
+        
+        console.log(`[Server] 'message' event received: ${msg.id._serialized}`);
+        // We rely on message_create to emit to socket to avoid duplicates, 
+        // but we log here to confirm reception.
+    });
+    
+    // SYNC EVENTS
+    client.on('chat_update', (chat) => {
+        console.log(`[Server] chat_update event for ${chat.id._serialized}`);
+        // We could emit a chat list update here
+        // For now, let's just log. 
+        // Ideally we should emit 'chat-update' to frontend if we had that logic.
+    });
+
     socket.on('send-message', async ({ accountId, chatId, message }) => {
         console.log(`[Server] received send-message event for ${chatId}`);
         if (!sessions.has(accountId)) {
@@ -459,39 +477,47 @@ io.on('connection', (socket) => {
           const page = await getPage(client);
           if (page) {
               try {
-                  const directResult = await page.evaluate((targetChatId) => {
-                      try {
-                          if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
-                          const chatModel = window.Store.Chat.get(targetChatId);
-                          if (!chatModel) return { found: false, error: 'Chat model not found' }; 
-                          
-                          if (chatModel.msgs.length < 10) chatModel.loadEarlierMsgs();
+                  // Wrap in timeout to prevent hanging
+                  const directResult = await Promise.race([
+                      page.evaluate(async (targetChatId) => {
+                          try {
+                              if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
+                              const chatModel = window.Store.Chat.get(targetChatId);
+                              if (!chatModel) return { found: false, error: 'Chat model not found' }; 
+                              
+                              // Async load earlier messages
+                              if (chatModel.msgs.length < 10) {
+                                  await chatModel.loadEarlierMsgs();
+                              }
 
-                          return { 
-                              found: true, 
-                              messages: chatModel.msgs.models.map(m => ({
-                                  id: { _serialized: m.id._serialized },
-                                  from: m.from,
-                                  to: m.to,
-                                  body: m.body,
-                                  timestamp: m.t,
-                                  fromMe: m.id.fromMe
-                              }))
-                          };
-                      } catch (e) {
-                          return { error: e.message };
-                      }
-                  }, chatId);
+                              return { 
+                                  found: true, 
+                                  messages: chatModel.msgs.models.map(m => ({
+                                      id: { _serialized: m.id._serialized },
+                                      from: m.from,
+                                      to: m.to,
+                                      body: m.body,
+                                      timestamp: m.t,
+                                      fromMe: m.id.fromMe
+                                  }))
+                              };
+                          } catch (e) {
+                              return { error: e.message };
+                          }
+                      }, chatId),
+                      new Promise((_, r) => setTimeout(() => r(new Error('Strategy 2 Timeout')), 10000))
+                  ]);
 
                   if (directResult && directResult.found) {
                       messages = directResult.messages;
                       fetchSuccess = true;
                       console.log(`[Server] Strategy 2 Success: ${messages.length} messages`);
                   } else {
-                      lastError = directResult.error || 'Direct Store failed';
+                      lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
                   }
               } catch (e) {
                   console.warn(`[Server] Strategy 2 Failed: ${e.message}`);
+                  if (!lastError) lastError = e.message;
               }
           }
       }
