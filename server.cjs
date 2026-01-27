@@ -354,11 +354,17 @@ io.on('connection', (socket) => {
       if (page) {
           try {
               console.log('[Server] Attempting Direct Store Fetch via Page Evaluation...');
+              
+              // Ensure Store is available
+              await page.waitForFunction('window.Store && window.Store.Chat', { timeout: 2000 }).catch(() => console.log('[Server] Window.Store wait timed out'));
+
               const directResult = await Promise.race([
                   page.evaluate((targetChatId) => {
                       try {
+                          if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
+                          
                           const chatModel = window.Store.Chat.get(targetChatId);
-                          if (!chatModel) return { found: false }; 
+                          if (!chatModel) return { found: false, error: 'Chat model not found' }; 
                           
                           // Load earlier messages if needed (optional, but good)
                           // if (chatModel.msgs.length < 10) chatModel.loadEarlierMsgs();
@@ -428,8 +434,16 @@ io.on('connection', (socket) => {
           }
       }
 
-      if (!fetchSuccess && !messages.length) {
-          console.warn('[Server] Both fetch methods failed or returned empty. Sending empty list.');
+      if (!fetchSuccess && messages.length === 0) {
+          console.warn('[Server] All fetches failed. Sending system warning.');
+          messages.push({
+              id: { _serialized: 'system-error-' + Date.now() },
+              from: 'system',
+              to: chatId,
+              body: '⚠️ System: Could not load message history. Real-time messages will appear here.',
+              timestamp: Math.floor(Date.now() / 1000),
+              fromMe: false
+          });
       }
       
       console.log(`[Server] Final message count: ${messages.length}`);
