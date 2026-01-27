@@ -552,7 +552,7 @@ io.on('connection', (socket) => {
                 fromMe: m.fromMe,
                 ack: m.ack
               }));
-              messages = mapped;
+              
               upsertMessages(accountId, chatId, mapped.map(m => ({
                   id: m.id._serialized,
                   from: m.from,
@@ -562,8 +562,11 @@ io.on('connection', (socket) => {
                   fromMe: m.fromMe,
                   ack: m.ack || 0
               })));
+              
+              // Refresh messages from store to include merged history
+              messages = getStoredMessages(accountId, chatId);
               fetchSuccess = true;
-              console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
+              console.log(`[Server] Strategy 1 Success: Synced ${mapped.length} new messages. Total: ${messages.length}`);
             } else {
               throw new Error('Chat not found in getChats result');
             }
@@ -620,7 +623,6 @@ io.on('connection', (socket) => {
               ]);
 
               if (directResult && directResult.found) {
-                messages = directResult.messages;
                 upsertMessages(accountId, chatId, directResult.messages.map(m => ({
                     id: m.id._serialized,
                     from: m.from,
@@ -630,8 +632,11 @@ io.on('connection', (socket) => {
                     fromMe: m.fromMe,
                     ack: m.ack || 0
                 })));
+                
+                // Refresh messages from store to include merged history
+                messages = getStoredMessages(accountId, chatId);
                 fetchSuccess = true;
-                console.log(`[Server] Strategy 2 Success: ${messages.length} messages`);
+                console.log(`[Server] Strategy 2 Success: Synced ${directResult.messages.length} new messages. Total: ${messages.length}`);
               } else {
                 lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
               }
