@@ -45,7 +45,7 @@ We will put this project in a **new folder** so it never touches your old projec
     npm run build
 
     # Start with PM2 (Name: whatsapp-v2)
-    pm2 start ecosystem.config.js
+    pm2 start ecosystem.config.cjs
     ```
 
 4.  **Save PM2 list** (so it restarts after reboot):

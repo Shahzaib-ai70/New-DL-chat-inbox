@@ -19,6 +19,6 @@ npm run build
 
 # 4. Restart the Server via PM2
 echo "🔄 Restarting Server..."
-pm2 restart ecosystem.config.js --env production
+pm2 startOrRestart ecosystem.config.cjs --env production
 
 echo "✅ Deployment Complete! App is running on Port 3002."
