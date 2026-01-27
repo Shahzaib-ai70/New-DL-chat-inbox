@@ -512,13 +512,13 @@ io.on('connection', (socket) => {
       
       try {
         let messages = [];
-        let fetchSuccess = false;
+        let networkFetchSuccess = false; // Track if we got FRESH data from WhatsApp
         let lastError = null;
 
+        // 1. Load from Local Store first (Instant Cache)
         const stored = getStoredMessages(accountId, chatId);
         if (stored && stored.length > 0) {
           messages = stored;
-          fetchSuccess = true;
           console.log(`[Server] Using stored history for ${chatId}, count=${messages.length}`);
         }
 
@@ -565,7 +565,7 @@ io.on('connection', (socket) => {
               
               // Refresh messages from store to include merged history
               messages = getStoredMessages(accountId, chatId);
-              fetchSuccess = true;
+              networkFetchSuccess = true;
               console.log(`[Server] Strategy 1 Success: Synced ${mapped.length} new messages. Total: ${messages.length}`);
             } else {
               throw new Error('Chat not found in getChats result');
@@ -578,7 +578,10 @@ io.on('connection', (socket) => {
           console.warn(`[Server] Strategy 1 failed: ${e.message}`);
         }
 
-        if (!fetchSuccess) {
+        // 2. Strategy 2: Direct Store fallback
+        // Run this if Strategy 1 failed, EVEN IF we have stored messages.
+        // We want fresh data if possible.
+        if (!networkFetchSuccess) {
           console.log('[Server] Strategy 2: Direct Store fallback...');
           const page = await getPage(client);
           if (page) {
@@ -635,7 +638,7 @@ io.on('connection', (socket) => {
                 
                 // Refresh messages from store to include merged history
                 messages = getStoredMessages(accountId, chatId);
-                fetchSuccess = true;
+                networkFetchSuccess = true;
                 console.log(`[Server] Strategy 2 Success: Synced ${directResult.messages.length} new messages. Total: ${messages.length}`);
               } else {
                 lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
@@ -649,7 +652,8 @@ io.on('connection', (socket) => {
           }
         }
 
-        if (!fetchSuccess && messages.length === 0) {
+        // If we have NO messages (no cache AND no network success), send error
+        if (!networkFetchSuccess && messages.length === 0) {
           console.warn('[Server] History fetch failed, sending system notice message.');
           messages.push({
             id: { _serialized: 'system-error-' + Date.now() },
