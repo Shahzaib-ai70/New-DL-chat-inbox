@@ -220,6 +220,10 @@ function App() {
       }
     })
 
+    newSocket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err)
+    })
+
     newSocket.on('qr', (data) => {
       // Only show QR if it matches the selected account
       if (data.accountId === selectedAccountId) {
@@ -228,6 +232,34 @@ function App() {
       }
     })
 
+    newSocket.on('status', (data) => {
+      if (data.accountId === selectedAccountId) {
+        console.log('Status update from backend:', data)
+        setLists(prevLists => {
+          const updated = { ...prevLists }
+          const listForPlatform = updated[activePlatform] || []
+          const index = listForPlatform.findIndex(a => a.id === selectedAccountId)
+          if (index !== -1) {
+            const current = listForPlatform[index]
+            listForPlatform[index] = {
+              ...current,
+              subtitle: data.status === 'Authenticated' ? 'Connected via WhatsApp Web' : (data.status || current.subtitle),
+              isConnected: data.status === 'Authenticated'
+            }
+            updated[activePlatform] = [...listForPlatform]
+          }
+          return updated
+        })
+        if (data.status === 'Auth Failure' || data.status === 'Init Failure') {
+          setQrCodeData('')
+          if (data.message) {
+            alert(`WhatsApp status: ${data.status}\n${data.message}`)
+          } else {
+            alert(`WhatsApp status: ${data.status}`)
+          }
+        }
+      }
+    })
     newSocket.on('ready', (data) => {
       console.log('WhatsApp Ready:', data)
       if (data.accountId === selectedAccountId) {
@@ -410,6 +442,7 @@ function App() {
     setSelectedChatId(null)
     setActiveChat(null)
     setActiveChatMessages([])
+    setQrCodeData('')
     
     // FORCE REFRESH: When switching back to an account, ensure we request the chat list again.
     // The existing useEffect for [selectedAccountId] handles the initial connection, 

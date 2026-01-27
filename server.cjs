@@ -203,7 +203,7 @@ io.on('connection', (socket) => {
 
     client.on('auth_failure', msg => {
       console.error(`Auth failure for ${accountId}`, msg);
-      io.to(accountId).emit('status', { accountId, status: 'Auth Failure' });
+      io.to(accountId).emit('status', { accountId, status: 'Auth Failure', message: msg });
     });
 
     client.on('message_create', async (msg) => {
@@ -246,7 +246,6 @@ io.on('connection', (socket) => {
       }
     });
 
-    // Handle sending a message
     socket.on('send-message', async ({ accountId, chatId, message }) => {
         console.log(`[Server] received send-message event for ${chatId}`);
         if (!sessions.has(accountId)) {
@@ -311,6 +310,28 @@ io.on('connection', (socket) => {
                      socket.emit('send-message-error', { accountId, chatId, error: e.message });
                 }
             }
+        }
+    });
+
+    socket.on('mark-chat-read', async ({ accountId, chatId }) => {
+        console.log(`[Server] mark-chat-read for ${chatId} in ${accountId}`);
+        if (!sessions.has(accountId)) {
+            console.warn(`[Server] mark-chat-read: Session not found for ${accountId}`);
+            return;
+        }
+        const client = sessions.get(accountId);
+        try {
+            if (client.sendSeen) {
+                await client.sendSeen(chatId);
+            } else {
+                const chat = await client.getChatById(chatId);
+                if (chat && chat.sendSeen) {
+                    await chat.sendSeen();
+                }
+            }
+            console.log(`[Server] mark-chat-read success for ${chatId}`);
+        } catch (e) {
+            console.error(`[Server] mark-chat-read failed for ${chatId}:`, e);
         }
     });
 
@@ -434,12 +455,12 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Initialize the client
     try {
         client.initialize();
         sessions.set(accountId, client);
     } catch (err) {
         console.error(`Failed to initialize client for ${accountId}:`, err);
+        io.to(accountId).emit('status', { accountId, status: 'Init Failure', message: err.message });
     }
   });
 
