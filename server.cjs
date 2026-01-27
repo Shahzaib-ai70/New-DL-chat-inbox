@@ -439,107 +439,152 @@ io.on('connection', (socket) => {
     // Handle fetching fetching messages for a specific chat
     socket.on('fetch-messages', async ({ accountId, chatId }) => {
       console.log(`[Server] Fetch request for ${chatId} in ${accountId}`);
-    if (!sessions.has(accountId)) {
-       console.warn(`[Server] Session not found for ${accountId}`);
-       socket.emit('chat-messages-error', { accountId, chatId, error: 'Session not found' });
-       return;
-    }
-    const client = sessions.get(accountId);
-    
-    try {
-      let messages = [];
-      let fetchSuccess = false;
-      let lastError = null;
+      if (!sessions.has(accountId)) {
+        console.warn(`[Server] Session not found for ${accountId}`);
+        socket.emit('chat-messages-error', { accountId, chatId, error: 'Session not found' });
+        return;
+      }
+      const client = sessions.get(accountId);
+      
+      try {
+        let messages = [];
+        let fetchSuccess = false;
+        let lastError = null;
 
-      console.log('[Server] Strategy: Direct Store Injection ONLY (stable mode)...');
-      const page = await getPage(client);
-      if (page) {
-          try {
+        console.log('[Server] Strategy 1: Standard library history fetch...');
+        try {
+          const allChats = await Promise.race([
+            client.getChats(),
+            new Promise((_, r) => setTimeout(() => r(new Error('getChats Timeout')), 7000))
+          ]);
+
+          if (allChats && allChats.length) {
+            const chat = allChats.find(c => {
+              if (!c || !c.id) return false;
+              if (typeof c.id === 'string') return c.id === chatId;
+              if (c.id._serialized) return c.id._serialized === chatId;
+              return false;
+            });
+
+            if (chat) {
+              const fetchedMsgs = await Promise.race([
+                chat.fetchMessages({ limit: 50 }),
+                new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 10000))
+              ]);
+
+              messages = fetchedMsgs.map(m => ({
+                id: { _serialized: m.id._serialized },
+                from: m.from,
+                to: m.to,
+                body: m.body,
+                timestamp: m.timestamp,
+                fromMe: m.fromMe,
+                ack: m.ack
+              }));
+              fetchSuccess = true;
+              console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
+            } else {
+              throw new Error('Chat not found in getChats result');
+            }
+          } else {
+            throw new Error('getChats returned empty list');
+          }
+        } catch (e) {
+          lastError = e.message;
+          console.warn(`[Server] Strategy 1 failed: ${e.message}`);
+        }
+
+        if (!fetchSuccess) {
+          console.log('[Server] Strategy 2: Direct Store fallback...');
+          const page = await getPage(client);
+          if (page) {
+            try {
               const directResult = await Promise.race([
-                  page.evaluate(async (targetChatId) => {
+                page.evaluate(async (targetChatId) => {
+                  try {
+                    if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
+                    const chatModel = window.Store.Chat.get(targetChatId);
+                    if (!chatModel) return { found: false, error: 'Chat model not found' }; 
+                    
+                    if (chatModel.msgs && chatModel.msgs.length < 10) {
                       try {
-                          if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
-                          const chatModel = window.Store.Chat.get(targetChatId);
-                          if (!chatModel) return { found: false, error: 'Chat model not found' }; 
-                          
-                          if (chatModel.msgs && chatModel.msgs.length < 10) {
-                              try {
-                                  if (typeof chatModel.loadEarlierMsgs === 'function') {
-                                      await chatModel.loadEarlierMsgs();
-                                  } else if (chatModel.msgs && typeof chatModel.msgs.loadEarlierMsgs === 'function') {
-                                      await chatModel.msgs.loadEarlierMsgs();
-                                  }
-                              } catch (e) {
-                              }
-                          }
-
-                          const models = chatModel.msgs && chatModel.msgs.models ? chatModel.msgs.models : [];
-
-                          return { 
-                              found: true, 
-                              messages: models.map(m => ({
-                                  id: { _serialized: m.id._serialized },
-                                  from: m.from,
-                                  to: m.to,
-                                  body: m.body,
-                                  timestamp: m.t,
-                                  fromMe: m.id.fromMe,
-                                  ack: m.ack
-                              }))
-                          };
+                        if (typeof chatModel.loadEarlierMsgs === 'function') {
+                          await chatModel.loadEarlierMsgs();
+                        } else if (chatModel.msgs && typeof chatModel.msgs.loadEarlierMsgs === 'function') {
+                          await chatModel.msgs.loadEarlierMsgs();
+                        }
                       } catch (e) {
-                          return { error: e.message };
                       }
-                  }, chatId),
-                  new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 10000))
+                    }
+
+                    const models = chatModel.msgs && chatModel.msgs.models ? chatModel.msgs.models : [];
+
+                    return { 
+                      found: true, 
+                      messages: models.map(m => ({
+                        id: { _serialized: m.id._serialized },
+                        from: m.from,
+                        to: m.to,
+                        body: m.body,
+                        timestamp: m.t,
+                        fromMe: m.id.fromMe,
+                        ack: m.ack
+                      }))
+                    };
+                  } catch (e) {
+                    return { error: e.message };
+                  }
+                }, chatId),
+                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 10000))
               ]);
 
               if (directResult && directResult.found) {
-                  messages = directResult.messages;
-                  fetchSuccess = true;
-                  console.log(`[Server] Direct Store Success: ${messages.length} messages`);
+                messages = directResult.messages;
+                fetchSuccess = true;
+                console.log(`[Server] Strategy 2 Success: ${messages.length} messages`);
               } else {
-                  lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
+                lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
               }
-          } catch (e) {
-              console.warn(`[Server] Direct Store evaluate failed: ${e.message}`);
+            } catch (e) {
+              console.warn(`[Server] Strategy 2 evaluate failed: ${e.message}`);
               lastError = e.message;
+            }
+          } else {
+            lastError = 'Puppeteer page / Store not available';
           }
-      } else {
-          lastError = 'Puppeteer page / Store not available';
-      }
+        }
 
-      if (!fetchSuccess && messages.length === 0) {
+        if (!fetchSuccess && messages.length === 0) {
           console.warn('[Server] History fetch failed, sending system notice message.');
           messages.push({
-              id: { _serialized: 'system-error-' + Date.now() },
-              from: 'system',
-              to: chatId,
-              body: `⚠️ System: Failed to load history (${lastError}). Real-time messages will appear here.`,
-              timestamp: Math.floor(Date.now() / 1000),
-              fromMe: false,
-              ack: 0
+            id: { _serialized: 'system-error-' + Date.now() },
+            from: 'system',
+            to: chatId,
+            body: `⚠️ System: Failed to load history (${lastError}). Real-time messages will appear here.`,
+            timestamp: Math.floor(Date.now() / 1000),
+            fromMe: false,
+            ack: 0
           });
-      }
-      
-      console.log(`[Server] Returning ${messages.length} messages for ${chatId}`);
-      
-      const formattedMessages = messages.map(msg => ({
-        id: msg.id._serialized || msg.id, 
-        from: msg.from,
-        to: msg.to,
-        body: msg.body,
-        timestamp: msg.timestamp,
-        fromMe: msg.fromMe,
-        ack: msg.ack || 0
-      }));
+        }
+        
+        console.log(`[Server] Returning ${messages.length} messages for ${chatId}`);
+        
+        const formattedMessages = messages.map(msg => ({
+          id: msg.id._serialized || msg.id, 
+          from: msg.from,
+          to: msg.to,
+          body: msg.body,
+          timestamp: msg.timestamp,
+          fromMe: msg.fromMe,
+          ack: msg.ack || 0
+        }));
 
-      socket.emit('chat-messages', { accountId, chatId, messages: formattedMessages });
-    } catch (e) {
-      console.error(`Error fetching messages for ${chatId} in ${accountId}:`, e);
-      socket.emit('chat-messages-error', { accountId, chatId, error: e.message });
-    }
-  });
+        socket.emit('chat-messages', { accountId, chatId, messages: formattedMessages });
+      } catch (e) {
+        console.error(`Error fetching messages for ${chatId} in ${accountId}:`, e);
+        socket.emit('chat-messages-error', { accountId, chatId, error: e.message });
+      }
+    });
 
     socket.on('delete-session', async ({ accountId }) => {
         if (sessions.has(accountId)) {
