@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const cors = require('cors');
@@ -7,6 +8,9 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// VPS DEPLOYMENT: Serve static files from 'dist' directory
+app.use(express.static(path.join(__dirname, 'dist')));
 
 app.post('/translate', async (req, res) => {
     const { text, targetLang } = req.body;
@@ -23,9 +27,7 @@ app.post('/translate', async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => {
-  res.send('WhatsApp Web Backend is running');
-});
+
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -50,6 +52,24 @@ const formatChats = (chats) => {
   }));
 };
 
+// Helper to reliably get the Puppeteer page
+const getPage = async (client) => {
+    if (client.pupPage) return client.pupPage;
+    if (client.mPage) return client.mPage;
+    if (client.pupBrowser) {
+        try {
+            const pages = await client.pupBrowser.pages();
+            if (pages.length > 0) {
+                client.pupPage = pages[0]; // Cache it
+                return pages[0];
+            }
+        } catch (e) {
+            console.error('[Server] Error getting pages from browser:', e);
+        }
+    }
+    return null;
+};
+
 // Helper to get chats with fallback (Puppeteer Direct Store)
 const getChatsWithFallback = async (client) => {
     try {
@@ -64,10 +84,11 @@ const getChatsWithFallback = async (client) => {
     }
 
     // Fallback: Puppeteer Direct Store Injection
-    if (client.pupPage) {
+    const page = await getPage(client);
+    if (page) {
         console.log('[Server] Attempting Direct Store Injection for chat list...');
         try {
-            const rawChats = await client.pupPage.evaluate(() => {
+            const rawChats = await page.evaluate(() => {
                 try {
                     // Access internal Store.Chat models
                     const models = window.Store.Chat.models;
@@ -323,37 +344,63 @@ io.on('connection', (socket) => {
       // HYBRID FETCH: Try standard fetch first, then fallback to Puppeteer Store Injection
       // This solves the "Not Fetching" issue when the library wrapper is flaky
       let messages = [];
+      
+      // SEQUENTIAL HYBRID FETCH:
+      // 1. Try Direct Store FIRST (Fastest, avoids library overhead)
+      // 2. If that fails/empty, DO NOT try Standard Fetch if it is prone to hanging.
+      
+      const page = await getPage(client);
+      console.log(`[Server] Fetching messages for ${chatId}... pupPage exists? ${!!page}`);
+
       try {
-           // Try standard method with timeout
-           const fetchPromise = chat.fetchMessages({ limit: 50 });
-           const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Fetch timeout')), 5000));
-           messages = await Promise.race([fetchPromise, timeoutPromise]);
-      } catch (err) {
-           console.warn(`[Server] Standard fetchMessages failed or timed out: ${err.message}. Switching to Direct Store Access...`);
-           
-           // DIRECT STORE ACCESS (The "Whatsapp Web Type Codes" approach)
-           // This injects code into the browser to grab messages directly from WhatsApp's internal Redux/Flux store
-           if (client.pupPage) {
-               messages = await client.pupPage.evaluate((targetChatId) => {
-                   try {
-                       const chatModel = window.Store.Chat.get(targetChatId);
-                       if (!chatModel) return [];
-                       // Grab the loaded messages directly
-                       const msgs = chatModel.msgs.models;
-                       return msgs.map(m => ({
-                           id: { _serialized: m.id._serialized },
-                           from: m.from,
-                           to: m.to,
-                           body: m.body,
-                           timestamp: m.t,
-                           fromMe: m.id.fromMe
-                       }));
-                   } catch (e) {
-                       return [];
+           // STEP 1: Direct Store Injection
+           if (page) {
+               try {
+                   console.log('[Server] Attempting Direct Store Fetch...');
+                   // Wrap evaluation in timeout to ensure it doesn't hang indefinitely
+                   const directMessages = await Promise.race([
+                       page.evaluate((targetChatId) => {
+                           try {
+                               const chatModel = window.Store.Chat.get(targetChatId);
+                               if (!chatModel) return null; // Return null to indicate "not found" vs "empty"
+                               const msgs = chatModel.msgs.models;
+                               return msgs.map(m => ({
+                                   id: { _serialized: m.id._serialized },
+                                   from: m.from,
+                                   to: m.to,
+                                   body: m.body,
+                                   timestamp: m.t,
+                                   fromMe: m.id.fromMe
+                               }));
+                           } catch (e) {
+                               return null;
+                           }
+                       }, chatId),
+                       new Promise((_, reject) => setTimeout(() => reject(new Error('Direct Store Timeout')), 2000))
+                   ]);
+
+                   if (directMessages && directMessages.length > 0) {
+                       console.log(`[Server] Direct Store fetch success: ${directMessages.length} messages`);
+                       messages = directMessages;
+                   } else {
+                       console.log('[Server] Direct Store returned null or empty.');
                    }
-               }, chatId);
-               console.log(`[Server] Direct Store Access retrieved ${messages.length} messages`);
+               } catch (e) {
+                   console.warn('[Server] Direct Store fetch error:', e.message);
+               }
+           } else {
+               console.log('[Server] No pupPage available. Skipping Direct Store.');
            }
+
+           // SKIP STEP 2: Standard Fetch is disabled to prevent "Loading..." loop.
+           // If Direct Store failed, we simply return empty list so user can Retry or see empty state.
+           if (messages.length === 0) {
+                console.log('[Server] Direct Store yielded no messages. Returning empty list to avoid blocking.');
+           }
+
+      } catch (err) {
+           console.warn(`[Server] General Message fetch error: ${err.message}`);
+           messages = [];
       }
       
       console.log(`[Server] Final message count: ${messages.length}`);
@@ -401,7 +448,12 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = 3002;
+// VPS DEPLOYMENT: Handle SPA routing - return index.html for all non-API routes
+app.get(/.*/, (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+const PORT = process.env.PORT || 3002;
 server.on('error', (e) => {
   console.error('Server error:', e);
 });
