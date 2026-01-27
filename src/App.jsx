@@ -166,20 +166,18 @@ function App() {
     return saved ? JSON.parse(saved) : null
   })
 
-  const [selectedChatId, setSelectedChatId] = useState(null)
+  const [selectedChatId, setSelectedChatId] = useState(() => {
+    return localStorage.getItem('selectedChatId') || null
+  })
   const selectedChatIdRef = useRef(selectedChatId)
-  // USER REQUEST: Explicit activeChat state to ensure object availability
-  const [activeChat, setActiveChat] = useState(null)
-  const [activeChatMessages, setActiveChatMessages] = useState([])
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false)
-  const [messageInput, setMessageInput] = useState('')
-
-  // Translation State
-  const [chatLanguages, setChatLanguages] = useState({})
-  const [autoTranslate, setAutoTranslate] = useState({})
-  const [showLangSelector, setShowLangSelector] = useState(false)
-
+  
+  // Update localStorage when selectedChatId changes
   useEffect(() => {
+    if (selectedChatId) {
+        localStorage.setItem('selectedChatId', selectedChatId)
+    } else {
+        localStorage.removeItem('selectedChatId')
+    }
     selectedChatIdRef.current = selectedChatId
   }, [selectedChatId])
 
@@ -197,6 +195,16 @@ function App() {
   })
 
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, accountId: null })
+
+  const [activeChat, setActiveChat] = useState(null)
+  const [activeChatMessages, setActiveChatMessages] = useState([])
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false)
+  const [messageInput, setMessageInput] = useState('')
+
+  // Translation State
+  const [chatLanguages, setChatLanguages] = useState({})
+  const [autoTranslate, setAutoTranslate] = useState({})
+  const [showLangSelector, setShowLangSelector] = useState(false)
 
   // Persistence Effects
   useEffect(() => {
@@ -307,10 +315,14 @@ function App() {
     newSocket.on('chat-list', (data) => {
       if (data.accountId === selectedAccountId) {
         console.log('Received chats for', data.accountId, data.chats)
-        setChats(prev => ({
-          ...prev,
-          [data.accountId]: data.chats
-        }))
+        if (data.chats && data.chats.length > 0) {
+            setChats(prev => ({
+            ...prev,
+            [data.accountId]: data.chats
+            }))
+        } else {
+            console.warn('Received empty chat list, ignoring to preserve cache.')
+        }
       }
     })
 

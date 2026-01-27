@@ -308,10 +308,6 @@ io.on('connection', (socket) => {
     if (sessions.has(accountId)) {
       const client = sessions.get(accountId);
       
-      // Ensure we re-attach the global IO listeners for this client if they might be stale?
-      // Actually, listeners are attached to the client instance, which emits to io.to(accountId).
-      // Since io is global and accountId is the same, it should be fine.
-      // But just in case, we can log to confirm.
       console.log(`[Server] Session exists for ${accountId}. Listeners should be active.`);
 
       // If client is already ready, send chats immediately
@@ -320,7 +316,11 @@ io.on('connection', (socket) => {
         socket.emit('ready', { accountId });
         try {
           const formattedChats = await getChatsWithFallback(client);
-          socket.emit('chat-list', { accountId, chats: formattedChats });
+          if (formattedChats && formattedChats.length > 0) {
+              socket.emit('chat-list', { accountId, chats: formattedChats });
+          } else {
+              console.warn(`[Server] Fetched 0 chats for ${accountId}, skipping emission to preserve cache.`);
+          }
         } catch (e) {
           console.error(`Error fetching chats for ${accountId}:`, e);
         }
@@ -362,7 +362,11 @@ io.on('connection', (socket) => {
       
       try {
         const formattedChats = await getChatsWithFallback(client);
-        io.to(accountId).emit('chat-list', { accountId, chats: formattedChats });
+        if (formattedChats && formattedChats.length > 0) {
+            io.to(accountId).emit('chat-list', { accountId, chats: formattedChats });
+        } else {
+            console.warn(`[Server] Fetched 0 chats on ready for ${accountId}, skipping emission.`);
+        }
       } catch (e) {
         console.error(`Error fetching chats for ${accountId}:`, e);
       }
