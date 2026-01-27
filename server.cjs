@@ -415,14 +415,22 @@ io.on('connection', (socket) => {
         }
         const client = sessions.get(accountId);
         try {
-            // Avoid client.sendSeen() because it can hit internal getChat bugs in some builds
-            const chat = await client.getChatById(chatId);
-            if (chat && chat.sendSeen) {
-                await chat.sendSeen();
-                console.log(`[Server] mark-chat-read success for ${chatId} via chat.sendSeen()`);
-            } else {
-                console.warn(`[Server] mark-chat-read: chat or chat.sendSeen not available for ${chatId}`);
+            const page = await getPage(client);
+            if (!page) {
+                console.warn('[Server] mark-chat-read: No Puppeteer page / Store not available');
+                return;
             }
+            await page.evaluate(async (targetChatId) => {
+                if (!window.Store || !window.Store.Chat) return;
+                const chat = window.Store.Chat.get(targetChatId);
+                if (!chat) return;
+                if (chat.sendSeen) {
+                    await chat.sendSeen();
+                } else if (chat.markSeen) {
+                    await chat.markSeen();
+                }
+            }, chatId);
+            console.log(`[Server] mark-chat-read success for ${chatId} via Direct Store`);
         } catch (e) {
             console.error(`[Server] mark-chat-read failed for ${chatId}:`, e);
         }
@@ -430,7 +438,7 @@ io.on('connection', (socket) => {
 
     // Handle fetching fetching messages for a specific chat
     socket.on('fetch-messages', async ({ accountId, chatId }) => {
-    console.log(`[Server] Fetch request for ${chatId} in ${accountId}`);
+      console.log(`[Server] Fetch request for ${chatId} in ${accountId}`);
     if (!sessions.has(accountId)) {
        console.warn(`[Server] Session not found for ${accountId}`);
        socket.emit('chat-messages-error', { accountId, chatId, error: 'Session not found' });
@@ -443,121 +451,65 @@ io.on('connection', (socket) => {
       let fetchSuccess = false;
       let lastError = null;
 
-      // STRATEGY 1: Standard Library Fetch (Most Robust) via getChats()
-      console.log('[Server] Strategy 1: Attempting Standard Library Fetch via getChats()...');
-      try {
-          const allChats = await Promise.race([
-              client.getChats(),
-              new Promise((_, r) => setTimeout(() => r(new Error('getChats Timeout')), 7000))
-          ]);
-
-          if (allChats && allChats.length) {
-              const chat = allChats.find(c => {
-                  if (!c || !c.id) return false;
-                  if (typeof c.id === 'string') return c.id === chatId;
-                  if (c.id._serialized) return c.id._serialized === chatId;
-                  return false;
-              });
-
-              if (chat) {
-                  console.log('[Server] Chat object found via getChats(), fetching messages...');
-                  const fetchedMsgs = await Promise.race([
-                      chat.fetchMessages({ limit: 50 }),
-                      new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 10000))
-                  ]);
-                  
-                  messages = fetchedMsgs.map(m => ({
-                      id: { _serialized: m.id._serialized },
-                      from: m.from,
-                      to: m.to,
-                      body: m.body,
-                      timestamp: m.timestamp,
-                      fromMe: m.fromMe,
-                      ack: m.ack
-                  }));
-                  fetchSuccess = true;
-                  console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
-              } else {
-                  throw new Error('Chat object not found in getChats() result');
-              }
-          } else {
-              throw new Error('getChats() returned empty list');
-          }
-      } catch (e) {
-          console.warn(`[Server] Strategy 1 Failed: ${e.message}`);
-          lastError = e.message;
-          
-          // Check for Critical State Error (underlying Store broken)
-          if (e.message && (e.message.includes("reading 'getChat'") || e.message.includes('getChats'))) {
-              console.log('[Server] Critical State Error detected during Strategy 1. Scheduling Page Reload.');
-               if (client.pupPage) {
-                   client.pupPage.reload().catch(err => console.error('Reload failed:', err));
-               }
-          }
-      }
-
-      // STRATEGY 2: Direct Store Injection (Fast, but maybe flaky on VPS)
-      if (!fetchSuccess) {
-          console.log('[Server] Strategy 2: Attempting Direct Store Injection...');
-          const page = await getPage(client);
-          if (page) {
-              try {
-                  // Wrap in timeout to prevent hanging
-                  const directResult = await Promise.race([
-                      page.evaluate(async (targetChatId) => {
-                          try {
-                              if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
-                              const chatModel = window.Store.Chat.get(targetChatId);
-                              if (!chatModel) return { found: false, error: 'Chat model not found' }; 
-                              
-                              // Async load earlier messages
-                              if (chatModel.msgs.length < 10) {
-                                  await chatModel.loadEarlierMsgs();
-                              }
-
-                              return { 
-                                  found: true, 
-                                  messages: chatModel.msgs.models.map(m => ({
-                                      id: { _serialized: m.id._serialized },
-                                      from: m.from,
-                                      to: m.to,
-                                      body: m.body,
-                                      timestamp: m.t,
-                                      fromMe: m.id.fromMe,
-                                      ack: m.ack
-                                  }))
-                              };
-                          } catch (e) {
-                              return { error: e.message };
+      console.log('[Server] Strategy: Direct Store Injection ONLY (stable mode)...');
+      const page = await getPage(client);
+      if (page) {
+          try {
+              const directResult = await Promise.race([
+                  page.evaluate(async (targetChatId) => {
+                      try {
+                          if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
+                          const chatModel = window.Store.Chat.get(targetChatId);
+                          if (!chatModel) return { found: false, error: 'Chat model not found' }; 
+                          
+                          if (chatModel.msgs.length < 10) {
+                              await chatModel.loadEarlierMsgs();
                           }
-                      }, chatId),
-                      new Promise((_, r) => setTimeout(() => r(new Error('Strategy 2 Timeout')), 10000))
-                  ]);
 
-                  if (directResult && directResult.found) {
-                      messages = directResult.messages;
-                      fetchSuccess = true;
-                      console.log(`[Server] Strategy 2 Success: ${messages.length} messages`);
-                  } else {
-                      lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
-                  }
-              } catch (e) {
-                  console.warn(`[Server] Strategy 2 Failed: ${e.message}`);
-                  if (!lastError) lastError = e.message;
+                          return { 
+                              found: true, 
+                              messages: chatModel.msgs.models.map(m => ({
+                                  id: { _serialized: m.id._serialized },
+                                  from: m.from,
+                                  to: m.to,
+                                  body: m.body,
+                                  timestamp: m.t,
+                                  fromMe: m.id.fromMe,
+                                  ack: m.ack
+                              }))
+                          };
+                      } catch (e) {
+                          return { error: e.message };
+                      }
+                  }, chatId),
+                  new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 10000))
+              ]);
+
+              if (directResult && directResult.found) {
+                  messages = directResult.messages;
+                  fetchSuccess = true;
+                  console.log(`[Server] Direct Store Success: ${messages.length} messages`);
+              } else {
+                  lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
               }
+          } catch (e) {
+              console.warn(`[Server] Direct Store evaluate failed: ${e.message}`);
+              lastError = e.message;
           }
+      } else {
+          lastError = 'Puppeteer page / Store not available';
       }
 
-      // Final Fallback: System Message if completely failed
       if (!fetchSuccess && messages.length === 0) {
-          console.warn('[Server] All fetch strategies failed.');
+          console.warn('[Server] History fetch failed, sending system notice message.');
           messages.push({
               id: { _serialized: 'system-error-' + Date.now() },
               from: 'system',
               to: chatId,
               body: `⚠️ System: Failed to load history (${lastError}). Real-time messages will appear here.`,
               timestamp: Math.floor(Date.now() / 1000),
-              fromMe: false
+              fromMe: false,
+              ack: 0
           });
       }
       
@@ -569,7 +521,8 @@ io.on('connection', (socket) => {
         to: msg.to,
         body: msg.body,
         timestamp: msg.timestamp,
-        fromMe: msg.fromMe
+        fromMe: msg.fromMe,
+        ack: msg.ack || 0
       }));
 
       socket.emit('chat-messages', { accountId, chatId, messages: formattedMessages });
