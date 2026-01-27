@@ -574,7 +574,22 @@ io.on('connection', (socket) => {
         const stored = getStoredMessages(accountId, chatId);
         if (stored && stored.length > 0) {
           messages = stored;
-          console.log(`[Server] Using stored history for ${chatId}, count=${messages.length}`);
+          console.log(`[Server] Database Hit: Returning ${messages.length} stored messages immediately for ${chatId}`);
+          
+          // FAST RETURN: Send stored messages immediately to UI
+          socket.emit('chat-messages', { 
+              accountId, 
+              chatId, 
+              messages: messages.map(msg => ({
+                  id: msg.id._serialized || msg.id, 
+                  from: msg.from, 
+                  to: msg.to, 
+                  body: msg.body, 
+                  timestamp: msg.timestamp, 
+                  fromMe: msg.fromMe,
+                  ack: msg.ack || 0
+              }))
+          });
         }
 
         console.log('[Server] Strategy 1: Standard library history fetch...');
