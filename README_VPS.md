@@ -120,8 +120,14 @@ systemctl restart nginx
 
 I have included a `deploy.sh` file. Whenever you push changes to GitHub, just do this on VPS:
 
-```bash
-cd ~/whatsapp-dashboard
-./deploy.sh
-```
+1.  **Make it executable (First time only):**
+    ```bash
+    cd ~/whatsapp-dashboard
+    chmod +x deploy.sh
+    ```
+
+2.  **Run it whenever you want to update:**
+    ```bash
+    ./deploy.sh
+    ```
 *It will pull the new code, rebuild, and restart automatically.*
