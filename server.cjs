@@ -83,24 +83,43 @@ const messageStoreFile = path.join(dataDir, 'messages.json');
 
 let messageStore = {};
 
+// Load store on startup
 try {
     if (fs.existsSync(messageStoreFile)) {
         const raw = fs.readFileSync(messageStoreFile, 'utf8');
-        messageStore = JSON.parse(raw || '{}');
-    }
-} catch (e) {
-    messageStore = {};
-}
-
-const persistMessageStore = () => {
-    try {
+        try {
+            messageStore = JSON.parse(raw || '{}');
+            console.log(`[Server] Loaded message store from disk: ${Object.keys(messageStore).length} accounts found.`);
+        } catch (parseErr) {
+            console.error('[Server] Message store JSON corrupted, resetting store.', parseErr);
+            messageStore = {};
+        }
+    } else {
+        console.log('[Server] No message store file found. Creating new store.');
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
-        fs.writeFileSync(messageStoreFile, JSON.stringify(messageStore), 'utf8');
-    } catch (e) {
-        console.error('Error persisting message store:', e);
     }
+} catch (e) {
+    console.error('[Server] Error loading message store:', e);
+    messageStore = {};
+}
+
+// Debounced Save to avoid disk trashing and corruption
+let saveTimeout = null;
+const persistMessageStore = () => {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+        try {
+            if (!fs.existsSync(dataDir)) {
+                fs.mkdirSync(dataDir, { recursive: true });
+            }
+            fs.writeFileSync(messageStoreFile, JSON.stringify(messageStore, null, 2), 'utf8');
+            console.log('[Server] Message store successfully saved to disk.');
+        } catch (e) {
+            console.error('[Server] CRITICAL: Error persisting message store:', e);
+        }
+    }, 1000); // 1 second debounce
 };
 
 const getStoredMessages = (accountId, chatId) => {

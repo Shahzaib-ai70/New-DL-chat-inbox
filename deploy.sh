@@ -14,6 +14,11 @@ echo "📦 Installing dependencies (Reinstalling backend modules)..."
 rm -rf node_modules
 npm install
 
+# 2.5 Ensure Data Directory Persistence
+echo "💾 configuring data persistence..."
+mkdir -p data
+chmod -R 777 data
+
 # 3. Build the React Frontend
 echo "🏗️ Building React Frontend..."
 npm run build
