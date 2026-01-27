@@ -478,7 +478,7 @@ function App() {
             return prev;
         });
 
-        // Safety timeout (Reduced to 2 seconds for snappier feedback)
+        // Safety timeout (Increased to 10 seconds to allow for server-side history fetching)
         const timer = setTimeout(() => {
             // Check if we are still waiting for THIS chat
             if (selectedChatIdRef.current === selectedChatId) {
@@ -491,7 +491,7 @@ function App() {
                     return prev;
                 });
             }
-        }, 2000);
+        }, 10000);
         
         return () => clearTimeout(timer);
     };

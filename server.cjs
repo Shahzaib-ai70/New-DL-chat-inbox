@@ -366,8 +366,10 @@ io.on('connection', (socket) => {
                           const chatModel = window.Store.Chat.get(targetChatId);
                           if (!chatModel) return { found: false, error: 'Chat model not found' }; 
                           
-                          // Load earlier messages if needed (optional, but good)
-                          // if (chatModel.msgs.length < 10) chatModel.loadEarlierMsgs();
+                          // Load earlier messages if needed
+                          if (chatModel.msgs.length < 10) {
+                              chatModel.loadEarlierMsgs();
+                          }
 
                           const msgs = chatModel.msgs.models;
                           const mapped = msgs.map(m => ({
