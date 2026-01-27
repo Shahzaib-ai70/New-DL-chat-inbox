@@ -25,6 +25,19 @@ netstat -tulpn | grep :80
 
 We will put this project in a **new folder** so it never touches your old project.
 
+### ⚠️ Prerequisite: Install Chrome Dependencies
+Since this app uses Puppeteer (Chrome) for WhatsApp, you MUST install these system libraries on your VPS or the QR code won't load:
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates fonts-liberation libasound2 \
+libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 \
+libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 \
+libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 \
+libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 \
+libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 \
+lsb-release wget xdg-utils
+```
+
 1.  **Go to your home directory:**
     ```bash
     cd ~
