@@ -346,88 +346,96 @@ io.on('connection', (socket) => {
     const client = sessions.get(accountId);
     
     try {
-      let chat = await client.getChatById(chatId);
-      
-      // Fallback: if getChatById fails to find it, search in all chats
-      if (!chat) {
-         console.log(`[Server] getChatById failed for ${chatId}, trying getAllChats fallback...`);
-         const allChats = await client.getChats();
-         chat = allChats.find(c => c.id._serialized === chatId);
-      }
-
-      if (!chat) {
-           console.error(`[Server] Chat not found: ${chatId}`);
-           socket.emit('chat-messages-error', { accountId, chatId, error: 'Chat not found' });
-           return;
-      }
-      console.log(`[Server] Chat found (${chat.name || 'unknown'}), fetching messages...`);
-      
-      // HYBRID FETCH: Try standard fetch first, then fallback to Puppeteer Store Injection
-      // This solves the "Not Fetching" issue when the library wrapper is flaky
-      let messages = [];
-      
-      // SEQUENTIAL HYBRID FETCH:
-      // 1. Try Direct Store FIRST (Fastest, avoids library overhead)
-      // 2. If that fails/empty, DO NOT try Standard Fetch if it is prone to hanging.
-      
+      // FAST PATH: Try Direct Store Injection FIRST (Bypasses potentially flaky Chat Object lookup)
       const page = await getPage(client);
-      console.log(`[Server] Fetching messages for ${chatId}... pupPage exists? ${!!page}`);
+      let messages = [];
+      let fetchSuccess = false;
 
-      try {
-           // STEP 1: Direct Store Injection
-           if (page) {
-               try {
-                   console.log('[Server] Attempting Direct Store Fetch...');
-                   // Wrap evaluation in timeout to ensure it doesn't hang indefinitely
-                   const directMessages = await Promise.race([
-                       page.evaluate((targetChatId) => {
-                           try {
-                               const chatModel = window.Store.Chat.get(targetChatId);
-                               if (!chatModel) return null; // Return null to indicate "not found" vs "empty"
-                               const msgs = chatModel.msgs.models;
-                               return msgs.map(m => ({
-                                   id: { _serialized: m.id._serialized },
-                                   from: m.from,
-                                   to: m.to,
-                                   body: m.body,
-                                   timestamp: m.t,
-                                   fromMe: m.id.fromMe
-                               }));
-                           } catch (e) {
-                               return null;
-                           }
-                       }, chatId),
-                       new Promise((_, reject) => setTimeout(() => reject(new Error('Direct Store Timeout')), 2000))
-                   ]);
+      if (page) {
+          try {
+              console.log('[Server] Attempting Direct Store Fetch via Page Evaluation...');
+              const directResult = await Promise.race([
+                  page.evaluate((targetChatId) => {
+                      try {
+                          const chatModel = window.Store.Chat.get(targetChatId);
+                          if (!chatModel) return { found: false }; 
+                          
+                          // Load earlier messages if needed (optional, but good)
+                          // if (chatModel.msgs.length < 10) chatModel.loadEarlierMsgs();
 
-                   if (directMessages && directMessages.length > 0) {
-                       console.log(`[Server] Direct Store fetch success: ${directMessages.length} messages`);
-                       messages = directMessages;
-                   } else {
-                       console.log('[Server] Direct Store returned null or empty.');
-                   }
-               } catch (e) {
-                   console.warn('[Server] Direct Store fetch error:', e.message);
-               }
-           } else {
-               console.log('[Server] No pupPage available. Skipping Direct Store.');
-           }
+                          const msgs = chatModel.msgs.models;
+                          const mapped = msgs.map(m => ({
+                              id: { _serialized: m.id._serialized },
+                              from: m.from,
+                              to: m.to,
+                              body: m.body,
+                              timestamp: m.t,
+                              fromMe: m.id.fromMe
+                          }));
+                          return { found: true, messages: mapped };
+                      } catch (e) {
+                          return { error: e.message };
+                      }
+                  }, chatId),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('Direct Store Timeout')), 3000))
+              ]);
 
-           // SKIP STEP 2: Standard Fetch is disabled to prevent "Loading..." loop.
-           // If Direct Store failed, we simply return empty list so user can Retry or see empty state.
-           if (messages.length === 0) {
-                console.log('[Server] Direct Store yielded no messages. Returning empty list to avoid blocking.');
-           }
+              if (directResult && directResult.found) {
+                  console.log(`[Server] Direct Store fetch success: ${directResult.messages.length} messages`);
+                  messages = directResult.messages;
+                  fetchSuccess = true;
+              } else if (directResult && directResult.error) {
+                  console.warn('[Server] Direct Store internal error:', directResult.error);
+              } else {
+                  console.warn('[Server] Direct Store: Chat not found in window.Store');
+              }
+          } catch (e) {
+              console.warn('[Server] Direct Store fetch failed/timed out:', e.message);
+          }
+      }
 
-      } catch (err) {
-           console.warn(`[Server] General Message fetch error: ${err.message}`);
-           messages = [];
+      // SLOW PATH / FALLBACK: Use standard library calls if Direct Store failed
+      if (!fetchSuccess) {
+          console.log('[Server] Falling back to Standard Library Fetch...');
+          try {
+              // Wrap getChatById in timeout
+              const chat = await Promise.race([
+                  client.getChatById(chatId),
+                  new Promise((_, r) => setTimeout(() => r(new Error('getChatById Timeout')), 2000))
+              ]);
+
+              if (!chat) {
+                  throw new Error('Chat not found');
+              }
+
+              console.log(`[Server] Chat object found, fetching messages...`);
+              const fetchedMsgs = await Promise.race([
+                  chat.fetchMessages({ limit: 50 }),
+                  new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 5000))
+              ]);
+              
+              messages = fetchedMsgs.map(m => ({
+                  id: { _serialized: m.id._serialized },
+                  from: m.from,
+                  to: m.to,
+                  body: m.body,
+                  timestamp: m.timestamp,
+                  fromMe: m.fromMe
+              }));
+              fetchSuccess = true;
+          } catch (err) {
+              console.error(`[Server] Standard Fetch failed: ${err.message}`);
+          }
+      }
+
+      if (!fetchSuccess && !messages.length) {
+          console.warn('[Server] Both fetch methods failed or returned empty. Sending empty list.');
       }
       
       console.log(`[Server] Final message count: ${messages.length}`);
       
       const formattedMessages = messages.map(msg => ({
-        id: msg.id._serialized,
+        id: msg.id._serialized || msg.id, // Handle both structures
         from: msg.from,
         to: msg.to,
         body: msg.body,
