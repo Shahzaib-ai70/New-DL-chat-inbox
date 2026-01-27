@@ -500,7 +500,20 @@ io.on('connection', (socket) => {
           } catch (err) {
               console.error(`[Server] Standard Fetch failed: ${err.message}`);
               if (err.message && err.message.includes("reading 'getChat'")) {
-                  lastError = "WhatsApp Internal State Error (Try Reloading)";
+                  console.log('[Server] Critical State Error. Attempting auto-repair (Page Reload)...');
+                  try {
+                      if (client.pupPage) {
+                          await client.pupPage.reload();
+                          // Wait for reload
+                          await new Promise(r => setTimeout(r, 5000));
+                          lastError = "System repairing connection... Please click chat again.";
+                      } else {
+                         lastError = "Connection Error: Please restart server."; 
+                      }
+                  } catch (e) {
+                      console.error('[Server] Auto-repair failed:', e);
+                      lastError = "Critical Error: " + err.message;
+                  }
               } else {
                   lastError = err.message;
               }
