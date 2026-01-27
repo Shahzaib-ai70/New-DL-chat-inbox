@@ -3,6 +3,34 @@ import { QRCodeCanvas } from 'qrcode.react'
 import { FaWhatsapp, FaTelegram, FaFacebook, FaInstagram, FaLine, FaTwitter, FaPlus, FaSearch, FaCheck, FaCheckDouble, FaPaperPlane, FaGlobe } from 'react-icons/fa'
 import { io } from 'socket.io-client'
 
+const LOCAL_MESSAGES_KEY = 'chatMessagesCache'
+
+const loadMessagesFromCache = (accountId, chatId) => {
+  try {
+    const raw = localStorage.getItem(LOCAL_MESSAGES_KEY)
+    if (!raw) return []
+    const all = JSON.parse(raw)
+    if (!all[accountId] || !all[accountId][chatId]) return []
+    return all[accountId][chatId]
+  } catch (e) {
+    console.error('Failed to load messages from cache', e)
+    return []
+  }
+}
+
+const saveMessagesToCache = (accountId, chatId, messages) => {
+  try {
+    if (!accountId || !chatId) return
+    const raw = localStorage.getItem(LOCAL_MESSAGES_KEY)
+    const all = raw ? JSON.parse(raw) : {}
+    if (!all[accountId]) all[accountId] = {}
+    all[accountId][chatId] = messages
+    localStorage.setItem(LOCAL_MESSAGES_KEY, JSON.stringify(all))
+  } catch (e) {
+    console.error('Failed to save messages to cache', e)
+  }
+}
+
 const SUPPORTED_LANGUAGES = [
     { code: 'af', name: 'Afrikaans' },
     { code: 'sq', name: 'Albanian' },
@@ -289,9 +317,9 @@ function App() {
     newSocket.on('chat-messages', (data) => {
       console.log('Received messages for', data.chatId, 'count:', data.messages.length)
       if (data.accountId === selectedAccountId) {
-          // If this message belongs to the currently selected chat, update the view
           if (selectedChatIdRef.current === data.chatId) {
              setActiveChatMessages(data.messages)
+             saveMessagesToCache(selectedAccountId, data.chatId, data.messages)
              setIsLoadingMessages(false)
           }
       }
@@ -461,9 +489,8 @@ function App() {
   useEffect(() => {
     if (!selectedChatId || !selectedAccountId || !socket) return;
 
-    const fetchMessages = () => {
+        const fetchMessages = () => {
         console.log(`[App] Triggering fetch for chat: ${selectedChatId} (Account: ${selectedAccountId})`);
-        setActiveChatMessages([]); // Clear previous messages
         setIsLoadingMessages(true);
         
         socket.emit('fetch-messages', { accountId: selectedAccountId, chatId: selectedChatId });
@@ -506,14 +533,28 @@ function App() {
   const handleChatClick = (chat) => {
     try {
         console.log(`[App] Chat clicked: ${chat.id}`);
-        // USER REQUEST: Always set the FULL chat object
         setActiveChat(chat);
         setSelectedChatId(chat.id);
-        // selectedChatIdRef is updated via its own useEffect
+        if (selectedAccountId) {
+          const cached = loadMessagesFromCache(selectedAccountId, chat.id)
+          if (cached && cached.length) {
+            setActiveChatMessages(cached)
+          } else {
+            setActiveChatMessages([])
+          }
+        } else {
+          setActiveChatMessages([])
+        }
     } catch (error) {
         console.error("Error in handleChatClick:", error);
     }
   }
+
+  useEffect(() => {
+    if (!selectedAccountId || !selectedChatId) return
+    if (!activeChatMessages || !activeChatMessages.length) return
+    saveMessagesToCache(selectedAccountId, selectedChatId, activeChatMessages)
+  }, [activeChatMessages, selectedAccountId, selectedChatId])
 
   const translateText = async (text, targetLang) => {
       try {
