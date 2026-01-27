@@ -397,7 +397,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle fetching messages for a specific chat
+    // Handle fetching fetching messages for a specific chat
     socket.on('fetch-messages', async ({ accountId, chatId }) => {
     console.log(`[Server] Fetch request for ${chatId} in ${accountId}`);
     if (!sessions.has(accountId)) {
@@ -408,84 +408,23 @@ io.on('connection', (socket) => {
     const client = sessions.get(accountId);
     
     try {
-      // FAST PATH: Try Direct Store Injection FIRST (Bypasses potentially flaky Chat Object lookup)
-      let lastError = null;
-      const page = await getPage(client);
       let messages = [];
       let fetchSuccess = false;
+      let lastError = null;
 
-      if (page) {
-          try {
-              console.log('[Server] Attempting Direct Store Fetch via Page Evaluation...');
-              
-              // Ensure Store is available
-              await page.waitForFunction('window.Store && window.Store.Chat', { timeout: 2000 }).catch(() => console.log('[Server] Window.Store wait timed out'));
+      // STRATEGY 1: Standard Library Fetch (Most Robust)
+      console.log('[Server] Strategy 1: Attempting Standard Library Fetch...');
+      try {
+          const chat = await Promise.race([
+              client.getChatById(chatId),
+              new Promise((_, r) => setTimeout(() => r(new Error('getChatById Timeout')), 5000))
+          ]);
 
-              const directResult = await Promise.race([
-                  page.evaluate((targetChatId) => {
-                      try {
-                          if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
-                          
-                          const chatModel = window.Store.Chat.get(targetChatId);
-                          if (!chatModel) return { found: false, error: 'Chat model not found' }; 
-                          
-                          // Load earlier messages if needed
-                          if (chatModel.msgs.length < 10) {
-                              chatModel.loadEarlierMsgs();
-                          }
-
-                          const msgs = chatModel.msgs.models;
-                          const mapped = msgs.map(m => ({
-                              id: { _serialized: m.id._serialized },
-                              from: m.from,
-                              to: m.to,
-                              body: m.body,
-                              timestamp: m.t,
-                              fromMe: m.id.fromMe
-                          }));
-                          return { found: true, messages: mapped };
-                      } catch (e) {
-                          return { error: e.message };
-                      }
-                  }, chatId),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error('Direct Store Timeout')), 10000))
-              ]);
-
-              if (directResult && directResult.found) {
-                  console.log(`[Server] Direct Store fetch success: ${directResult.messages.length} messages`);
-                  messages = directResult.messages;
-                  fetchSuccess = true;
-              } else if (directResult && directResult.error) {
-                  console.warn('[Server] Direct Store internal error:', directResult.error);
-                  lastError = directResult.error;
-              } else {
-                  console.warn('[Server] Direct Store: Chat not found in window.Store');
-                  lastError = 'Chat not found in Store';
-              }
-          } catch (e) {
-              console.warn('[Server] Direct Store fetch failed/timed out:', e.message);
-              lastError = e.message;
-          }
-      }
-
-      // SLOW PATH / FALLBACK: Use standard library calls if Direct Store failed
-      if (!fetchSuccess) {
-          console.log('[Server] Falling back to Standard Library Fetch...');
-          try {
-              // Wrap getChatById in timeout
-              const chat = await Promise.race([
-                  client.getChatById(chatId),
-                  new Promise((_, r) => setTimeout(() => r(new Error('getChatById Timeout')), 5000))
-              ]);
-
-              if (!chat) {
-                  throw new Error('Chat not found');
-              }
-
-              console.log(`[Server] Chat object found, fetching messages...`);
+          if (chat) {
+              console.log('[Server] Chat object found, fetching messages...');
               const fetchedMsgs = await Promise.race([
                   chat.fetchMessages({ limit: 50 }),
-                  new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 15000))
+                  new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 10000))
               ]);
               
               messages = fetchedMsgs.map(m => ({
@@ -497,45 +436,83 @@ io.on('connection', (socket) => {
                   fromMe: m.fromMe
               }));
               fetchSuccess = true;
-          } catch (err) {
-              console.error(`[Server] Standard Fetch failed: ${err.message}`);
-              if (err.message && err.message.includes("reading 'getChat'")) {
-                  console.log('[Server] Critical State Error. Attempting auto-repair (Page Reload)...');
-                  try {
-                      if (client.pupPage) {
-                          await client.pupPage.reload();
-                          // Wait for reload
-                          await new Promise(r => setTimeout(r, 5000));
-                          lastError = "System repairing connection... Please click chat again.";
-                      } else {
-                         lastError = "Connection Error: Please restart server."; 
+              console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
+          } else {
+              throw new Error('Chat object not found');
+          }
+      } catch (e) {
+          console.warn(`[Server] Strategy 1 Failed: ${e.message}`);
+          lastError = e.message;
+          
+          // Check for Critical State Error
+          if (e.message && e.message.includes("reading 'getChat'")) {
+              console.log('[Server] Critical State Error detected. Scheduling Page Reload.');
+               if (client.pupPage) {
+                   client.pupPage.reload().catch(err => console.error('Reload failed:', err));
+               }
+          }
+      }
+
+      // STRATEGY 2: Direct Store Injection (Fast, but maybe flaky on VPS)
+      if (!fetchSuccess) {
+          console.log('[Server] Strategy 2: Attempting Direct Store Injection...');
+          const page = await getPage(client);
+          if (page) {
+              try {
+                  const directResult = await page.evaluate((targetChatId) => {
+                      try {
+                          if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
+                          const chatModel = window.Store.Chat.get(targetChatId);
+                          if (!chatModel) return { found: false, error: 'Chat model not found' }; 
+                          
+                          if (chatModel.msgs.length < 10) chatModel.loadEarlierMsgs();
+
+                          return { 
+                              found: true, 
+                              messages: chatModel.msgs.models.map(m => ({
+                                  id: { _serialized: m.id._serialized },
+                                  from: m.from,
+                                  to: m.to,
+                                  body: m.body,
+                                  timestamp: m.t,
+                                  fromMe: m.id.fromMe
+                              }))
+                          };
+                      } catch (e) {
+                          return { error: e.message };
                       }
-                  } catch (e) {
-                      console.error('[Server] Auto-repair failed:', e);
-                      lastError = "Critical Error: " + err.message;
+                  }, chatId);
+
+                  if (directResult && directResult.found) {
+                      messages = directResult.messages;
+                      fetchSuccess = true;
+                      console.log(`[Server] Strategy 2 Success: ${messages.length} messages`);
+                  } else {
+                      lastError = directResult.error || 'Direct Store failed';
                   }
-              } else {
-                  lastError = err.message;
+              } catch (e) {
+                  console.warn(`[Server] Strategy 2 Failed: ${e.message}`);
               }
           }
       }
 
+      // Final Fallback: System Message if completely failed
       if (!fetchSuccess && messages.length === 0) {
-          console.warn('[Server] All fetches failed. Sending system warning.');
+          console.warn('[Server] All fetch strategies failed.');
           messages.push({
               id: { _serialized: 'system-error-' + Date.now() },
               from: 'system',
               to: chatId,
-              body: `⚠️ System: Could not load message history. Error: ${lastError || 'Unknown'}. Real-time messages will appear here.`,
+              body: `⚠️ System: Failed to load history (${lastError}). Real-time messages will appear here.`,
               timestamp: Math.floor(Date.now() / 1000),
               fromMe: false
           });
       }
       
-      console.log(`[Server] Final message count: ${messages.length}`);
+      console.log(`[Server] Returning ${messages.length} messages for ${chatId}`);
       
       const formattedMessages = messages.map(msg => ({
-        id: msg.id._serialized || msg.id, // Handle both structures
+        id: msg.id._serialized || msg.id, 
         from: msg.from,
         to: msg.to,
         body: msg.body,
