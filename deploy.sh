@@ -10,7 +10,8 @@ echo "📥 Pulling latest code..."
 git pull origin main
 
 # 2. Install dependencies (backend & frontend)
-echo "📦 Installing dependencies..."
+echo "📦 Installing dependencies (Reinstalling backend modules)..."
+rm -rf node_modules
 npm install
 
 # 3. Build the React Frontend

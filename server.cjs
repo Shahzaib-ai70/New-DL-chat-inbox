@@ -136,16 +136,36 @@ const formatChats = (chats) => {
 
 // Helper to reliably get the Puppeteer page
 const getPage = async (client) => {
+    // 1. Try cached page first
     if (client.pupPage) {
-        // Verify it's still valid
         try {
-            await client.pupPage.evaluate(() => window.Store);
-            return client.pupPage;
+            // Fast check if page is still alive
+            if (client.pupPage.isClosed && client.pupPage.isClosed()) {
+                 console.log('[Server] Cached page is closed, discarding.');
+                 client.pupPage = null;
+            } else {
+                 await client.pupPage.evaluate(() => 1);
+                 return client.pupPage;
+            }
         } catch (e) {
-            client.pupPage = null; // Reset if invalid
+            console.warn('[Server] Cached page check failed:', e.message);
+            client.pupPage = null; 
         }
     }
     
+    // 2. Try internal reference (client.mPage) often available in wwebjs
+    if (client.mPage) {
+        try {
+             await client.mPage.evaluate(() => 1);
+             console.log('[Server] Found valid client.mPage');
+             client.pupPage = client.mPage;
+             return client.mPage;
+        } catch(e) {
+             console.warn('[Server] client.mPage found but invalid:', e.message);
+        }
+    }
+
+    // 3. Try finding via pupBrowser
     if (client.pupBrowser) {
         try {
             const pages = await client.pupBrowser.pages();
@@ -153,7 +173,13 @@ const getPage = async (client) => {
             
             for (const page of pages) {
                 try {
-                    const hasStore = await page.evaluate(() => typeof window.Store !== 'undefined' && window.Store.Chat);
+                    // Check for Store AND Chat model to be sure it's the main app
+                    const hasStore = await page.evaluate(() => {
+                        return typeof window !== 'undefined' && 
+                               window.Store && 
+                               window.Store.Chat;
+                    });
+                    
                     if (hasStore) {
                         console.log('[Server] Found page with window.Store');
                         client.pupPage = page;
@@ -164,15 +190,19 @@ const getPage = async (client) => {
                 }
             }
             
-            // If scanning failed, try the first one as last resort
+            // If scanning failed, try the first one as last resort (often the main one)
             if (pages.length > 0) {
                 console.log('[Server] No page with Store found, defaulting to first page');
+                client.pupPage = pages[0];
                 return pages[0];
             }
         } catch (e) {
             console.error('[Server] Error getting pages from browser:', e);
         }
+    } else {
+        console.error('[Server] client.pupBrowser is NOT defined. Is the client initialized?');
     }
+    
     return null;
 };
 
@@ -655,11 +685,14 @@ io.on('connection', (socket) => {
         // If we have NO messages (no cache AND no network success), send error
         if (!networkFetchSuccess && messages.length === 0) {
           console.warn('[Server] History fetch failed, sending system notice message.');
+          const puppeteerStatus = client.pupBrowser ? 'Browser Active' : 'Browser Missing';
+          const pageStatus = await getPage(client) ? 'Page Found' : 'Page Missing';
+          
           messages.push({
             id: { _serialized: 'system-error-' + Date.now() },
             from: 'system',
             to: chatId,
-            body: `⚠️ System: Failed to load history (${lastError}). Real-time messages will appear here.`,
+            body: `⚠️ System: Failed to load history (${lastError}). Debug: ${puppeteerStatus} / ${pageStatus}. Real-time messages will appear here.`,
             timestamp: Math.floor(Date.now() / 1000),
             fromMe: false,
             ack: 0
