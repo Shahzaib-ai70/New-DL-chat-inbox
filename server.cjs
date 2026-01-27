@@ -27,6 +27,44 @@ app.post('/translate', async (req, res) => {
     }
 });
 
+// DEBUG ENDPOINT: Screenshot
+app.get('/debug/screenshot/:accountId', async (req, res) => {
+    const { accountId } = req.params;
+    if (!sessions.has(accountId)) return res.status(404).send('Session not found');
+    
+    const client = sessions.get(accountId);
+    const page = await getPage(client);
+    
+    if (!page) return res.status(500).send('No Puppeteer page found');
+    
+    try {
+        const screenshot = await page.screenshot({ encoding: 'binary' });
+        res.setHeader('Content-Type', 'image/png');
+        res.send(screenshot);
+    } catch (e) {
+        res.status(500).send('Error taking screenshot: ' + e.message);
+    }
+});
+
+// DEBUG ENDPOINT: HTML Dump
+app.get('/debug/html/:accountId', async (req, res) => {
+    const { accountId } = req.params;
+    if (!sessions.has(accountId)) return res.status(404).send('Session not found');
+    
+    const client = sessions.get(accountId);
+    const page = await getPage(client);
+    
+    if (!page) return res.status(500).send('No Puppeteer page found');
+    
+    try {
+        const content = await page.content();
+        res.setHeader('Content-Type', 'text/html');
+        res.send(content);
+    } catch (e) {
+        res.status(500).send('Error getting content: ' + e.message);
+    }
+});
+
 
 
 const server = http.createServer(app);
@@ -461,7 +499,11 @@ io.on('connection', (socket) => {
               fetchSuccess = true;
           } catch (err) {
               console.error(`[Server] Standard Fetch failed: ${err.message}`);
-              lastError = err.message;
+              if (err.message && err.message.includes("reading 'getChat'")) {
+                  lastError = "WhatsApp Internal State Error (Try Reloading)";
+              } else {
+                  lastError = err.message;
+              }
           }
       }
 
