@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const cors = require('cors');
@@ -75,8 +76,51 @@ const io = new Server(server, {
   }
 });
 
-// Map to store clients: accountId -> Client instance
 const sessions = new Map();
+
+const dataDir = path.join(__dirname, 'data');
+const messageStoreFile = path.join(dataDir, 'messages.json');
+
+let messageStore = {};
+
+try {
+    if (fs.existsSync(messageStoreFile)) {
+        const raw = fs.readFileSync(messageStoreFile, 'utf8');
+        messageStore = JSON.parse(raw || '{}');
+    }
+} catch (e) {
+    messageStore = {};
+}
+
+const persistMessageStore = () => {
+    try {
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+        fs.writeFileSync(messageStoreFile, JSON.stringify(messageStore), 'utf8');
+    } catch (e) {
+        console.error('Error persisting message store:', e);
+    }
+};
+
+const getStoredMessages = (accountId, chatId) => {
+    if (!messageStore[accountId]) return [];
+    return messageStore[accountId][chatId] || [];
+};
+
+const upsertMessages = (accountId, chatId, newMessages) => {
+    if (!messageStore[accountId]) messageStore[accountId] = {};
+    if (!messageStore[accountId][chatId]) messageStore[accountId][chatId] = [];
+    const existing = messageStore[accountId][chatId];
+    const byId = new Map(existing.map(m => [m.id, m]));
+    newMessages.forEach(m => {
+        if (!m || !m.id) return;
+        byId.set(m.id, m);
+    });
+    const merged = Array.from(byId.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    messageStore[accountId][chatId] = merged;
+    persistMessageStore();
+};
 
 // Helper to format chats for frontend
 const formatChats = (chats) => {
@@ -269,7 +313,6 @@ io.on('connection', (socket) => {
     });
 
     client.on('message_create', async (msg) => {
-      // Forward all new messages (incoming and outgoing) to the frontend
       try {
         let chatId;
         try {
@@ -290,6 +333,17 @@ io.on('connection', (socket) => {
             chatId: chatId,
             fromMe: msg.fromMe
         });
+
+        const storedMessage = {
+            id: msg.id._serialized,
+            from: msg.from,
+            to: msg.to,
+            body: msg.body,
+            timestamp: msg.timestamp,
+            fromMe: msg.fromMe,
+            ack: msg.ack || 0
+        };
+        upsertMessages(accountId, chatId, [storedMessage]);
 
         io.to(accountId).emit('message', {
           accountId,
@@ -350,9 +404,19 @@ io.on('connection', (socket) => {
         const client = sessions.get(accountId);
         try {
             console.log(`[Server] Attempting client.sendMessage to ${chatId}`);
-            // DIRECT SEND: Use client.sendMessage(chatId, ...)
             const sentMessage = await client.sendMessage(chatId, message);
             console.log(`[Server] Message sent successfully to ${chatId}, ID: ${sentMessage.id._serialized}`);
+
+            const storedMessage = {
+                id: sentMessage.id._serialized,
+                from: sentMessage.from,
+                to: sentMessage.to,
+                body: sentMessage.body,
+                timestamp: sentMessage.timestamp,
+                fromMe: true,
+                ack: sentMessage.ack || 1
+            };
+            upsertMessages(accountId, chatId, [storedMessage]);
             
             socket.emit('message-ack', {
                 accountId,
@@ -451,6 +515,13 @@ io.on('connection', (socket) => {
         let fetchSuccess = false;
         let lastError = null;
 
+        const stored = getStoredMessages(accountId, chatId);
+        if (stored && stored.length > 0) {
+          messages = stored;
+          fetchSuccess = true;
+          console.log(`[Server] Using stored history for ${chatId}, count=${messages.length}`);
+        }
+
         console.log('[Server] Strategy 1: Standard library history fetch...');
         try {
           const allChats = await Promise.race([
@@ -472,7 +543,7 @@ io.on('connection', (socket) => {
                 new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 10000))
               ]);
 
-              messages = fetchedMsgs.map(m => ({
+              const mapped = fetchedMsgs.map(m => ({
                 id: { _serialized: m.id._serialized },
                 from: m.from,
                 to: m.to,
@@ -481,6 +552,16 @@ io.on('connection', (socket) => {
                 fromMe: m.fromMe,
                 ack: m.ack
               }));
+              messages = mapped;
+              upsertMessages(accountId, chatId, mapped.map(m => ({
+                  id: m.id._serialized,
+                  from: m.from,
+                  to: m.to,
+                  body: m.body,
+                  timestamp: m.timestamp,
+                  fromMe: m.fromMe,
+                  ack: m.ack || 0
+              })));
               fetchSuccess = true;
               console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
             } else {
@@ -540,6 +621,15 @@ io.on('connection', (socket) => {
 
               if (directResult && directResult.found) {
                 messages = directResult.messages;
+                upsertMessages(accountId, chatId, directResult.messages.map(m => ({
+                    id: m.id._serialized,
+                    from: m.from,
+                    to: m.to,
+                    body: m.body,
+                    timestamp: m.timestamp,
+                    fromMe: m.fromMe,
+                    ack: m.ack || 0
+                })));
                 fetchSuccess = true;
                 console.log(`[Server] Strategy 2 Success: ${messages.length} messages`);
               } else {
