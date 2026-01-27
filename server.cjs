@@ -80,7 +80,7 @@ const io = new Server(server, {
 
 const sessions = new Map();
 
-const dataDir = path.join(process.cwd(), 'data');
+const dataDir = path.join(__dirname, 'data');
 const messageStoreFile = path.join(dataDir, 'messages.json');
 
 let messageStore = {};
@@ -92,9 +92,13 @@ try {
         const raw = fs.readFileSync(messageStoreFile, 'utf8');
         try {
             messageStore = JSON.parse(raw || '{}');
-            console.log(`[Server] Loaded message store: ${Object.keys(messageStore).length} accounts found.`);
+            const accountCount = Object.keys(messageStore).length;
+            const totalChats = Object.values(messageStore).reduce((acc, chats) => acc + Object.keys(chats).length, 0);
+            console.log(`[Server] Loaded message store: ${accountCount} accounts, ${totalChats} chats found.`);
         } catch (parseErr) {
             console.error('[Server] Message store JSON corrupted, resetting store.', parseErr);
+            // Backup corrupted file
+            fs.copyFileSync(messageStoreFile, messageStoreFile + '.bak');
             messageStore = {};
         }
     } else {
@@ -129,7 +133,14 @@ const persistMessageStore = () => {
 };
 
 const getStoredMessages = (accountId, chatId) => {
-    if (!messageStore[accountId]) return [];
+    if (!messageStore[accountId]) {
+        console.log(`[Server] getStoredMessages: Account ${accountId} not found in store. Available: ${Object.keys(messageStore).join(', ')}`);
+        return [];
+    }
+    if (!messageStore[accountId][chatId]) {
+         console.log(`[Server] getStoredMessages: Chat ${chatId} not found in account ${accountId}.`);
+         return [];
+    }
     return messageStore[accountId][chatId] || [];
 };
 
@@ -558,21 +569,14 @@ io.on('connection', (socket) => {
     // Handle fetching fetching messages for a specific chat
     socket.on('fetch-messages', async ({ accountId, chatId }) => {
       console.log(`[Server] Fetch request for ${chatId} in ${accountId}`);
-      if (!sessions.has(accountId)) {
-        console.warn(`[Server] Session not found for ${accountId}`);
-        socket.emit('chat-messages-error', { accountId, chatId, error: 'Session not found' });
-        return;
-      }
-      const client = sessions.get(accountId);
       
-      try {
-        let messages = [];
-        let networkFetchSuccess = false; // Track if we got FRESH data from WhatsApp
-        let lastError = null;
+      let messages = [];
+      let networkFetchSuccess = false; // Track if we got FRESH data from WhatsApp
+      let lastError = null;
 
-        // 1. Load from Local Store first (Instant Cache)
-        const stored = getStoredMessages(accountId, chatId);
-        if (stored && stored.length > 0) {
+      // 1. Load from Local Store first (Instant Cache) - WORKS OFFLINE / WITHOUT SESSION
+      const stored = getStoredMessages(accountId, chatId);
+      if (stored && stored.length > 0) {
           messages = stored;
           console.log(`[Server] Database Hit: Returning ${messages.length} stored messages immediately for ${chatId}`);
           
@@ -590,7 +594,18 @@ io.on('connection', (socket) => {
                   ack: msg.ack || 0
               }))
           });
+      }
+
+      if (!sessions.has(accountId)) {
+        console.warn(`[Server] Session not found for ${accountId} - returning only stored history if available.`);
+        if (messages.length === 0) {
+             socket.emit('chat-messages-error', { accountId, chatId, error: 'Session not active yet. Please wait.' });
         }
+        return;
+      }
+      const client = sessions.get(accountId);
+      
+      try {
 
         console.log('[Server] Strategy 1: Standard library history fetch...');
         try {
