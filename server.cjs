@@ -19,12 +19,14 @@ app.post('/translate', async (req, res) => {
         return res.status(400).json({ error: 'Missing text or targetLang' });
     }
     try {
+        // Dynamic import for ESM module
         const { translate } = await import('@vitalets/google-translate-api');
         const result = await translate(text, { to: targetLang });
         res.json({ translatedText: result.text });
     } catch (error) {
         console.error('Translation error:', error);
-        res.status(500).json({ error: 'Translation failed', details: error.message });
+        // Fallback: return original text to prevent UI breakage
+        res.json({ translatedText: text, error: 'Translation failed' });
     }
 });
 
@@ -78,7 +80,7 @@ const io = new Server(server, {
 
 const sessions = new Map();
 
-const dataDir = path.join(__dirname, 'data');
+const dataDir = path.join(process.cwd(), 'data');
 const messageStoreFile = path.join(dataDir, 'messages.json');
 
 let messageStore = {};
@@ -86,16 +88,17 @@ let messageStore = {};
 // Load store on startup
 try {
     if (fs.existsSync(messageStoreFile)) {
+        console.log(`[Server] Loading message store from: ${messageStoreFile}`);
         const raw = fs.readFileSync(messageStoreFile, 'utf8');
         try {
             messageStore = JSON.parse(raw || '{}');
-            console.log(`[Server] Loaded message store from disk: ${Object.keys(messageStore).length} accounts found.`);
+            console.log(`[Server] Loaded message store: ${Object.keys(messageStore).length} accounts found.`);
         } catch (parseErr) {
             console.error('[Server] Message store JSON corrupted, resetting store.', parseErr);
             messageStore = {};
         }
     } else {
-        console.log('[Server] No message store file found. Creating new store.');
+        console.log(`[Server] No message store found at ${messageStoreFile}. Creating new one.`);
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
@@ -105,7 +108,7 @@ try {
     messageStore = {};
 }
 
-// Debounced Save to avoid disk trashing and corruption
+// Robust Persistence
 let saveTimeout = null;
 const persistMessageStore = () => {
     if (saveTimeout) clearTimeout(saveTimeout);
@@ -114,12 +117,15 @@ const persistMessageStore = () => {
             if (!fs.existsSync(dataDir)) {
                 fs.mkdirSync(dataDir, { recursive: true });
             }
-            fs.writeFileSync(messageStoreFile, JSON.stringify(messageStore, null, 2), 'utf8');
-            console.log('[Server] Message store successfully saved to disk.');
+            // Atomic write approach: write to temp file then rename
+            const tempFile = messageStoreFile + '.tmp';
+            fs.writeFileSync(tempFile, JSON.stringify(messageStore, null, 2), 'utf8');
+            fs.renameSync(tempFile, messageStoreFile);
+            console.log('[Server] Message store saved successfully.');
         } catch (e) {
             console.error('[Server] CRITICAL: Error persisting message store:', e);
         }
-    }, 1000); // 1 second debounce
+    }, 500); // 0.5s debounce
 };
 
 const getStoredMessages = (accountId, chatId) => {

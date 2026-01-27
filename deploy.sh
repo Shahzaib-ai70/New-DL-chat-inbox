@@ -10,8 +10,8 @@ echo "📥 Pulling latest code..."
 git pull origin main
 
 # 2. Install dependencies (backend & frontend)
-echo "📦 Installing dependencies (Reinstalling backend modules)..."
-rm -rf node_modules
+echo "📦 Installing dependencies..."
+# Only remove if specifically requested or corrupted, otherwise standard install updates it
 npm install
 
 # 2.5 Ensure Data Directory Persistence
