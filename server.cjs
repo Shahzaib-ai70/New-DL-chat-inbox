@@ -401,15 +401,14 @@ io.on('connection', (socket) => {
         }
         const client = sessions.get(accountId);
         try {
-            if (client.sendSeen) {
-                await client.sendSeen(chatId);
+            // Avoid client.sendSeen() because it can hit internal getChat bugs in some builds
+            const chat = await client.getChatById(chatId);
+            if (chat && chat.sendSeen) {
+                await chat.sendSeen();
+                console.log(`[Server] mark-chat-read success for ${chatId} via chat.sendSeen()`);
             } else {
-                const chat = await client.getChatById(chatId);
-                if (chat && chat.sendSeen) {
-                    await chat.sendSeen();
-                }
+                console.warn(`[Server] mark-chat-read: chat or chat.sendSeen not available for ${chatId}`);
             }
-            console.log(`[Server] mark-chat-read success for ${chatId}`);
         } catch (e) {
             console.error(`[Server] mark-chat-read failed for ${chatId}:`, e);
         }
@@ -430,41 +429,52 @@ io.on('connection', (socket) => {
       let fetchSuccess = false;
       let lastError = null;
 
-      // STRATEGY 1: Standard Library Fetch (Most Robust)
-      console.log('[Server] Strategy 1: Attempting Standard Library Fetch...');
+      // STRATEGY 1: Standard Library Fetch (Most Robust) via getChats()
+      console.log('[Server] Strategy 1: Attempting Standard Library Fetch via getChats()...');
       try {
-          const chat = await Promise.race([
-              client.getChatById(chatId),
-              new Promise((_, r) => setTimeout(() => r(new Error('getChatById Timeout')), 5000))
+          const allChats = await Promise.race([
+              client.getChats(),
+              new Promise((_, r) => setTimeout(() => r(new Error('getChats Timeout')), 7000))
           ]);
 
-          if (chat) {
-              console.log('[Server] Chat object found, fetching messages...');
-              const fetchedMsgs = await Promise.race([
-                  chat.fetchMessages({ limit: 50 }),
-                  new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 10000))
-              ]);
-              
-              messages = fetchedMsgs.map(m => ({
-                  id: { _serialized: m.id._serialized },
-                  from: m.from,
-                  to: m.to,
-                  body: m.body,
-                  timestamp: m.timestamp,
-                  fromMe: m.fromMe
-              }));
-              fetchSuccess = true;
-              console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
+          if (allChats && allChats.length) {
+              const chat = allChats.find(c => {
+                  if (!c || !c.id) return false;
+                  if (typeof c.id === 'string') return c.id === chatId;
+                  if (c.id._serialized) return c.id._serialized === chatId;
+                  return false;
+              });
+
+              if (chat) {
+                  console.log('[Server] Chat object found via getChats(), fetching messages...');
+                  const fetchedMsgs = await Promise.race([
+                      chat.fetchMessages({ limit: 50 }),
+                      new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 10000))
+                  ]);
+                  
+                  messages = fetchedMsgs.map(m => ({
+                      id: { _serialized: m.id._serialized },
+                      from: m.from,
+                      to: m.to,
+                      body: m.body,
+                      timestamp: m.timestamp,
+                      fromMe: m.fromMe
+                  }));
+                  fetchSuccess = true;
+                  console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
+              } else {
+                  throw new Error('Chat object not found in getChats() result');
+              }
           } else {
-              throw new Error('Chat object not found');
+              throw new Error('getChats() returned empty list');
           }
       } catch (e) {
           console.warn(`[Server] Strategy 1 Failed: ${e.message}`);
           lastError = e.message;
           
-          // Check for Critical State Error
-          if (e.message && e.message.includes("reading 'getChat'")) {
-              console.log('[Server] Critical State Error detected. Scheduling Page Reload.');
+          // Check for Critical State Error (underlying Store broken)
+          if (e.message && (e.message.includes("reading 'getChat'") || e.message.includes('getChats'))) {
+              console.log('[Server] Critical State Error detected during Strategy 1. Scheduling Page Reload.');
                if (client.pupPage) {
                    client.pupPage.reload().catch(err => console.error('Reload failed:', err));
                }
