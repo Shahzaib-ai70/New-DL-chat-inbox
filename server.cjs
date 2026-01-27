@@ -317,6 +317,19 @@ io.on('connection', (socket) => {
         // We rely on message_create to emit to socket to avoid duplicates, 
         // but we log here to confirm reception.
     });
+
+    client.on('message_ack', (msg, ack) => {
+        console.log(`[Server] message_ack: ${msg.id._serialized} status: ${ack}`);
+        // Determine chatId. For outgoing messages, 'to' is the chat.
+        const chatId = msg.to; 
+        
+        io.to(accountId).emit('message-ack', {
+            accountId,
+            chatId,
+            messageId: msg.id._serialized,
+            ack: ack
+        });
+    });
     
     // SYNC EVENTS
     client.on('chat_update', (chat) => {
@@ -346,7 +359,8 @@ io.on('connection', (socket) => {
                 chatId,
                 tempId: null,
                 messageId: sentMessage.id._serialized,
-                timestamp: sentMessage.timestamp
+                timestamp: sentMessage.timestamp,
+                ack: 1
             });
 
         } catch (e) {
@@ -458,7 +472,8 @@ io.on('connection', (socket) => {
                       to: m.to,
                       body: m.body,
                       timestamp: m.timestamp,
-                      fromMe: m.fromMe
+                      fromMe: m.fromMe,
+                      ack: m.ack
                   }));
                   fetchSuccess = true;
                   console.log(`[Server] Strategy 1 Success: ${messages.length} messages`);
@@ -508,7 +523,8 @@ io.on('connection', (socket) => {
                                       to: m.to,
                                       body: m.body,
                                       timestamp: m.t,
-                                      fromMe: m.id.fromMe
+                                      fromMe: m.id.fromMe,
+                                      ack: m.ack
                                   }))
                               };
                           } catch (e) {

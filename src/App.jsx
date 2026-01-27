@@ -317,15 +317,19 @@ function App() {
         if (data.accountId === selectedAccountId && selectedChatIdRef.current === data.chatId) {
             setActiveChatMessages(prev => {
                 return prev.map(msg => {
-                    // Match the latest pending message or use tempId if we had one
-                    // Since we didn't pass tempId to server, we match by content and pending status
-                    // ideally we should pass tempId. For now, we just unflag the last pending message.
+                    // Update by ID if it matches (for status updates like 1->2->3)
+                    if (msg.id === data.messageId) {
+                         return { ...msg, ack: data.ack };
+                    }
+
+                    // Match the latest pending message or use tempId if we had that logic
                     if (msg.pending && !msg.id.startsWith('temp-ack')) { 
                         return { 
                             ...msg, 
                             pending: false, 
                             id: data.messageId, 
-                            timestamp: data.timestamp 
+                            timestamp: data.timestamp,
+                            ack: data.ack || 1
                         };
                     }
                     return msg;
@@ -982,6 +986,17 @@ function App() {
                            <div className="message-time">
                               {msg.timestamp ? new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Sending...'}
                               {msg.pending && <span style={{ marginLeft: '4px' }}>🕒</span>}
+                              {!msg.pending && msg.fromMe && (
+                                  <span style={{ marginLeft: '4px', verticalAlign: 'middle', display: 'inline-flex' }}>
+                                      {msg.ack >= 3 ? (
+                                          <FaCheckDouble color="#53bdeb" title="Read" /> 
+                                      ) : msg.ack >= 2 ? (
+                                          <FaCheckDouble color="#888" title="Received" /> 
+                                      ) : (
+                                          <FaCheck color="#888" title="Sent" /> 
+                                      )}
+                                  </span>
+                              )}
                            </div>
                         </div>
                         )
