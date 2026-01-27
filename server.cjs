@@ -54,13 +54,37 @@ const formatChats = (chats) => {
 
 // Helper to reliably get the Puppeteer page
 const getPage = async (client) => {
-    if (client.pupPage) return client.pupPage;
-    if (client.mPage) return client.mPage;
+    if (client.pupPage) {
+        // Verify it's still valid
+        try {
+            await client.pupPage.evaluate(() => window.Store);
+            return client.pupPage;
+        } catch (e) {
+            client.pupPage = null; // Reset if invalid
+        }
+    }
+    
     if (client.pupBrowser) {
         try {
             const pages = await client.pupBrowser.pages();
+            console.log(`[Server] Scanning ${pages.length} pages for window.Store...`);
+            
+            for (const page of pages) {
+                try {
+                    const hasStore = await page.evaluate(() => typeof window.Store !== 'undefined' && window.Store.Chat);
+                    if (hasStore) {
+                        console.log('[Server] Found page with window.Store');
+                        client.pupPage = page;
+                        return page;
+                    }
+                } catch (e) {
+                    // Ignore errors on pages we can't access
+                }
+            }
+            
+            // If scanning failed, try the first one as last resort
             if (pages.length > 0) {
-                client.pupPage = pages[0]; // Cache it
+                console.log('[Server] No page with Store found, defaulting to first page');
                 return pages[0];
             }
         } catch (e) {
@@ -347,6 +371,7 @@ io.on('connection', (socket) => {
     
     try {
       // FAST PATH: Try Direct Store Injection FIRST (Bypasses potentially flaky Chat Object lookup)
+      let lastError = null;
       const page = await getPage(client);
       let messages = [];
       let fetchSuccess = false;
@@ -385,7 +410,7 @@ io.on('connection', (socket) => {
                           return { error: e.message };
                       }
                   }, chatId),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error('Direct Store Timeout')), 3000))
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('Direct Store Timeout')), 10000))
               ]);
 
               if (directResult && directResult.found) {
@@ -394,11 +419,14 @@ io.on('connection', (socket) => {
                   fetchSuccess = true;
               } else if (directResult && directResult.error) {
                   console.warn('[Server] Direct Store internal error:', directResult.error);
+                  lastError = directResult.error;
               } else {
                   console.warn('[Server] Direct Store: Chat not found in window.Store');
+                  lastError = 'Chat not found in Store';
               }
           } catch (e) {
               console.warn('[Server] Direct Store fetch failed/timed out:', e.message);
+              lastError = e.message;
           }
       }
 
@@ -409,7 +437,7 @@ io.on('connection', (socket) => {
               // Wrap getChatById in timeout
               const chat = await Promise.race([
                   client.getChatById(chatId),
-                  new Promise((_, r) => setTimeout(() => r(new Error('getChatById Timeout')), 2000))
+                  new Promise((_, r) => setTimeout(() => r(new Error('getChatById Timeout')), 5000))
               ]);
 
               if (!chat) {
@@ -419,7 +447,7 @@ io.on('connection', (socket) => {
               console.log(`[Server] Chat object found, fetching messages...`);
               const fetchedMsgs = await Promise.race([
                   chat.fetchMessages({ limit: 50 }),
-                  new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 5000))
+                  new Promise((_, r) => setTimeout(() => r(new Error('fetchMessages Timeout')), 15000))
               ]);
               
               messages = fetchedMsgs.map(m => ({
@@ -433,6 +461,7 @@ io.on('connection', (socket) => {
               fetchSuccess = true;
           } catch (err) {
               console.error(`[Server] Standard Fetch failed: ${err.message}`);
+              lastError = err.message;
           }
       }
 
@@ -442,7 +471,7 @@ io.on('connection', (socket) => {
               id: { _serialized: 'system-error-' + Date.now() },
               from: 'system',
               to: chatId,
-              body: '⚠️ System: Could not load message history. Real-time messages will appear here.',
+              body: `⚠️ System: Could not load message history. Error: ${lastError || 'Unknown'}. Real-time messages will appear here.`,
               timestamp: Math.floor(Date.now() / 1000),
               fromMe: false
           });
