@@ -462,13 +462,22 @@ io.on('connection', (socket) => {
                           const chatModel = window.Store.Chat.get(targetChatId);
                           if (!chatModel) return { found: false, error: 'Chat model not found' }; 
                           
-                          if (chatModel.msgs.length < 10) {
-                              await chatModel.loadEarlierMsgs();
+                          if (chatModel.msgs && chatModel.msgs.length < 10) {
+                              try {
+                                  if (typeof chatModel.loadEarlierMsgs === 'function') {
+                                      await chatModel.loadEarlierMsgs();
+                                  } else if (chatModel.msgs && typeof chatModel.msgs.loadEarlierMsgs === 'function') {
+                                      await chatModel.msgs.loadEarlierMsgs();
+                                  }
+                              } catch (e) {
+                              }
                           }
+
+                          const models = chatModel.msgs && chatModel.msgs.models ? chatModel.msgs.models : [];
 
                           return { 
                               found: true, 
-                              messages: chatModel.msgs.models.map(m => ({
+                              messages: models.map(m => ({
                                   id: { _serialized: m.id._serialized },
                                   from: m.from,
                                   to: m.to,
