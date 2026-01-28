@@ -110,9 +110,21 @@ pm2 startup
 
 ---
 
-## 🛠️ Troubleshooting
+## 🔒 Step 4: Fix HTTPS (The "Wrong Project" Fix)
 
-If your site is still not working, run this diagnostic tool on your VPS:
+If you see your **Old Project** when visiting the site, it's because your browser is forcing HTTPS, but we haven't set up the security certificate yet. Nginx panics and shows the default (old) site.
+
+**Run this single command on your VPS to fix it:**
+
+```bash
+sudo certbot --nginx -d app.dlchats.site
+```
+
+1.  It will ask for an email (enter yours).
+2.  Agree to terms (`Y`).
+3.  It will install the certificate and **automatically update Nginx**.
+
+Now refresh your browser. It should show the **New Project**.
 
 ```bash
 cd /var/www/dlchats
