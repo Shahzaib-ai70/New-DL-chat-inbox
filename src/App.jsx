@@ -1086,7 +1086,7 @@ function App() {
                               {msg.pending && <span style={{ marginLeft: '4px' }}>🕒</span>}
                               {!msg.pending && msg.fromMe && (
                                   <span style={{ marginLeft: '4px', verticalAlign: 'middle', display: 'inline-flex' }}>
-                                      {msg.ack >= 3 ? (
+                                      {(msg.ack >= 3 || msg.ack === 4) ? (
                                           <FaCheckDouble color="#53bdeb" title="Read" /> 
                                       ) : msg.ack >= 2 ? (
                                           <FaCheckDouble color="#888" title="Received" /> 

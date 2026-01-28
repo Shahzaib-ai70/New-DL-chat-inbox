@@ -853,19 +853,27 @@ io.on('connection', (socket) => {
                       }
                     }
 
+                    // FIX: Ensure models is an array and map safely
                     const models = chatModel.msgs && chatModel.msgs.models ? chatModel.msgs.models : [];
-
+                    
                     return { 
                       found: true, 
-                      messages: models.map(m => ({
-                        id: { _serialized: m.id._serialized },
-                        from: m.from,
-                        to: m.to,
-                        body: m.body,
-                        timestamp: m.t,
-                        fromMe: m.id.fromMe,
-                        ack: m.ack
-                      }))
+                      messages: models.map(m => {
+                        // Safe extraction of ACK
+                        let ack = 0;
+                        if (m.ack !== undefined) ack = m.ack;
+                        else if (m.id.fromMe) ack = 1; // Default to 1 if fromMe and ack missing
+
+                        return {
+                            id: { _serialized: m.id._serialized },
+                            from: m.from,
+                            to: m.to,
+                            body: m.body,
+                            timestamp: m.t,
+                            fromMe: m.id.fromMe,
+                            ack: ack
+                        };
+                      })
                     };
                   } catch (e) {
                     return { error: e.message };
