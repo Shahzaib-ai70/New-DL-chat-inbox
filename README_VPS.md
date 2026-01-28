@@ -70,19 +70,19 @@ pm2 startup
 
 ---
 
-## 🌐 Step 3: Connect Domain (dlchats.site)
+## 🌐 Step 3: Connect Domain (app.dlchats.site)
 
-**IMPORTANT:** Even if `http://72.60.236.77:3002` doesn't open (due to firewall), **this step will make it work** via the domain!
+**IMPORTANT:** You configured the subdomain `app`, so your site will be at `http://app.dlchats.site`.
 
-1.  **Create Config:**
+1.  **Create/Edit Config:**
     ```bash
     nano /etc/nginx/sites-available/dlchats.site
     ```
 
-2.  **Paste Content:**
+2.  **Paste Content (Updated for 'app' subdomain):**
     ```nginx
     server {
-        server_name dlchats.site www.dlchats.site;
+        server_name app.dlchats.site;
 
         location / {
             proxy_pass http://localhost:3002;
@@ -100,7 +100,10 @@ pm2 startup
 
 3.  **Enable & Restart:**
     ```bash
+    # If not already linked
     ln -s /etc/nginx/sites-available/dlchats.site /etc/nginx/sites-enabled/
+    
+    # Check and restart
     nginx -t
     systemctl restart nginx
     ```

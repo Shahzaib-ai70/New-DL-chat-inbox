@@ -40,6 +40,12 @@ echo ""
 echo "5️⃣  CHECKING DOMAIN CONFIG..."
 if [ -f /etc/nginx/sites-enabled/dlchats.site ]; then
     echo "✅ /etc/nginx/sites-enabled/dlchats.site EXISTS."
+    # Check if content has the correct subdomain
+    if grep -q "app.dlchats.site" /etc/nginx/sites-enabled/dlchats.site; then
+        echo "✅ Config contains 'app.dlchats.site'."
+    else
+        echo "⚠️  Config might be missing 'app.dlchats.site'. Please check server_name."
+    fi
 else
     echo "❌ /etc/nginx/sites-enabled/dlchats.site is MISSING!"
 fi
