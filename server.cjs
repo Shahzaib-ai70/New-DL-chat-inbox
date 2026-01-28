@@ -296,6 +296,116 @@ const getChatsWithFallback = async (client) => {
     return [];
 };
 
+// NEW: Background Polling Mechanism to ensure live updates
+const activePolls = new Map(); // accountId -> intervalId
+
+const startPolling = (client, accountId) => {
+    if (activePolls.has(accountId)) return;
+
+    console.log(`[Server] Starting background polling for ${accountId} (3s interval)`);
+    const interval = setInterval(async () => {
+        const page = await getPage(client);
+        if (!page) return;
+
+        try {
+            // Check for new messages in ALL chats
+            const recentMessages = await page.evaluate(() => {
+                if (!window.Store || !window.Store.Chat) return [];
+                
+                // Get all chats
+                const chats = window.Store.Chat.models;
+                const results = [];
+                
+                chats.forEach(chat => {
+                    // Check last message
+                    if (chat.msgs && chat.msgs.length > 0) {
+                        const lastMsg = chat.msgs.models[chat.msgs.models.length - 1];
+                        if (lastMsg) {
+                            results.push({
+                                id: lastMsg.id._serialized,
+                                from: lastMsg.from,
+                                to: lastMsg.to,
+                                body: lastMsg.body,
+                                timestamp: lastMsg.t,
+                                fromMe: lastMsg.id.fromMe,
+                                ack: lastMsg.ack,
+                                chatId: chat.id._serialized,
+                                chatName: chat.name || chat.formattedTitle || chat.contact.name || chat.id.user,
+                                unreadCount: chat.unreadCount
+                            });
+                        }
+                    }
+                });
+                return results;
+            });
+
+            // Process results on server side
+            let hasUpdates = false;
+            recentMessages.forEach(msg => {
+                const stored = getStoredMessages(accountId, msg.chatId);
+                const lastStored = stored.length > 0 ? stored[stored.length - 1] : null;
+                
+                // If we don't have this message, or it's newer than our last stored one
+                const isNew = !lastStored || (msg.timestamp > (lastStored.timestamp || 0) && msg.id !== lastStored.id);
+                
+                if (isNew) {
+                    // Check if it's really not in our list (double check by ID)
+                    const exists = stored.some(m => m.id === msg.id);
+                    if (!exists) {
+                        console.log(`[Server] Polling found NEW message: ${msg.id} in ${msg.chatId}`);
+                        
+                        const msgObj = {
+                            id: msg.id,
+                            from: msg.from,
+                            to: msg.to,
+                            body: msg.body,
+                            timestamp: msg.timestamp,
+                            fromMe: msg.fromMe,
+                            ack: msg.ack || 0
+                        };
+
+                        upsertMessages(accountId, msg.chatId, [msgObj]);
+
+                        // Emit message event
+                        io.to(accountId).emit('message', {
+                            accountId,
+                            chatId: msg.chatId,
+                            message: msgObj
+                        });
+                        hasUpdates = true;
+                    }
+                }
+            });
+
+            // If we found new messages, we should probably update the chat list too
+            // to reflect new timestamps/last messages/unread counts
+            if (hasUpdates) {
+                 // We can emit a partial update or just re-fetch the chat list
+                 // Let's just emit the chat list update based on the polled data
+                 // The polled data already contains enough info for the chat list
+                 const chatList = recentMessages.map(msg => ({
+                    id: msg.chatId,
+                    name: msg.chatName,
+                    message: msg.body,
+                    time: new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    unread: msg.unreadCount || 0,
+                    avatarColor: '#128c7e'
+                 }));
+                 // We need to merge this with existing chat list to not lose chats that have no messages?
+                 // Actually getChatsWithFallback does a full fetch. 
+                 // Let's rely on the client to update the chat list based on the 'message' event for now,
+                 // OR we can periodically emit 'chat-list' if we want to be safe.
+                 // For now, the 'message' event should trigger the UI to update the chat preview.
+            }
+
+        } catch (e) {
+            // console.warn('[Server] Polling error:', e.message);
+        }
+    }, 3000); // Poll every 3 seconds
+
+    activePolls.set(accountId, interval);
+};
+
 io.on('connection', (socket) => {
   console.log('Frontend connected');
 
@@ -314,6 +424,7 @@ io.on('connection', (socket) => {
       // If client is already ready, send chats immediately
       if (client.info) {
         console.log(`Client ${accountId} already ready, sending chats`);
+        startPolling(client, accountId); // Start polling if not already started
         socket.emit('ready', { accountId });
         try {
           const formattedChats = await getChatsWithFallback(client);
@@ -359,6 +470,7 @@ io.on('connection', (socket) => {
 
     client.on('ready', async () => {
       console.log(`Client ${accountId} is ready!`);
+      startPolling(client, accountId); // Start polling
       io.to(accountId).emit('ready', { accountId });
       
       try {
@@ -851,6 +963,13 @@ io.on('connection', (socket) => {
     socket.on('delete-session', async ({ accountId }) => {
         if (sessions.has(accountId)) {
             console.log(`Deleting session for ${accountId}`);
+            
+            // Stop polling
+            if (activePolls.has(accountId)) {
+                clearInterval(activePolls.get(accountId));
+                activePolls.delete(accountId);
+            }
+
             const client = sessions.get(accountId);
             try {
                 await client.destroy();
