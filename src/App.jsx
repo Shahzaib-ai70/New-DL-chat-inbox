@@ -1118,12 +1118,4 @@ function App() {
   )
 }
 
-function AppWithErrorBoundary() {
-  return (
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  );
-}
-
-export default AppWithErrorBoundary
+export default App
