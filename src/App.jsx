@@ -396,6 +396,21 @@ function App() {
                 });
             });
         }
+        // Also reflect ACK in chat list ticks like WhatsApp
+        if (data.accountId === selectedAccountId) {
+            setChats(prev => {
+                const accountChats = prev[selectedAccountId] || [];
+                const chatIndex = accountChats.findIndex(c => c.id === data.chatId);
+                if (chatIndex === -1) return prev;
+                const newAccountChats = [...accountChats];
+                const chat = newAccountChats[chatIndex];
+                if (chat.lastFromMe) {
+                    newAccountChats[chatIndex] = { ...chat, lastAck: data.ack };
+                    return { ...prev, [selectedAccountId]: newAccountChats };
+                }
+                return prev;
+            });
+        }
     });
 
     newSocket.on('message', (data) => {
@@ -418,7 +433,9 @@ function App() {
                     message: data.message.body,
                     time: new Date(data.message.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     // If it's the active chat OR it's my message, reset/keep unread 0. Otherwise increment.
-                    unread: (selectedChatIdRef.current === data.chatId || isFromMe) ? 0 : ((chat.unread || 0) + 1)
+                    unread: (selectedChatIdRef.current === data.chatId || isFromMe) ? 0 : ((chat.unread || 0) + 1),
+                    lastFromMe: isFromMe,
+                    lastAck: typeof data.message.ack === 'number' ? data.message.ack : (isFromMe ? 1 : 0)
                   };
                   newAccountChats.splice(chatIndex, 1);
                   newAccountChats.unshift(updatedChat);
@@ -431,7 +448,9 @@ function App() {
                        message: data.message.body,
                        time: new Date(data.message.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                        unread: isFromMe ? 0 : 1,
-                       avatarColor: '#128c7e'
+                       avatarColor: '#128c7e',
+                       lastFromMe: isFromMe,
+                       lastAck: typeof data.message.ack === 'number' ? data.message.ack : (isFromMe ? 1 : 0)
                    };
                    newAccountChats.unshift(newChat);
                }
@@ -551,20 +570,14 @@ function App() {
             return prev;
         });
 
-        // Safety timeout (Increased to 10 seconds to allow for server-side history fetching)
+        // Safety timeout (Reduced to 12 seconds)
         const timer = setTimeout(() => {
-            // Check if we are still waiting for THIS chat
+            console.warn(`[App] Timeout waiting for messages: ${selectedChatId}`);
+            // Force clear loading state if it's still loading for this chat
             if (selectedChatIdRef.current === selectedChatId) {
-                console.warn(`[App] Timeout waiting for messages: ${selectedChatId}`);
-                setIsLoadingMessages((prev) => {
-                    if (prev) {
-                        // Only turn off if still loading
-                        return false;
-                    }
-                    return prev;
-                });
+                setIsLoadingMessages(false);
             }
-        }, 10000);
+        }, 12000);
         
         return () => clearTimeout(timer);
     };
@@ -590,6 +603,9 @@ function App() {
   const handleChatClick = (chat) => {
     try {
         console.log(`[App] Chat clicked: ${chat.id}`);
+        // Update ref immediately to avoid race where early socket responses
+        // arrive before the effect updates selectedChatIdRef.
+        selectedChatIdRef.current = chat.id;
         setActiveChat(chat);
         setSelectedChatId(chat.id);
         if (selectedAccountId) {
@@ -728,7 +744,9 @@ function App() {
                  ...newAccountChats[chatIndex], 
                  message: messageInput,
                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                 unread: 0
+                 unread: 0,
+                 lastFromMe: true,
+                 lastAck: 1
              };
              // Move to top
              newAccountChats.splice(chatIndex, 1);
@@ -934,7 +952,17 @@ function App() {
                       {chat.unread > 0 ? (
                         <span className="unread-badge">{chat.unread}</span>
                       ) : (
-                        <span className="read-status"><FaCheckDouble /></span>
+                        <span className="read-status">
+                          {chat.lastFromMe ? (
+                            (chat.lastAck >= 3 || chat.lastAck === 4) ? (
+                              <FaCheckDouble color="#53bdeb" />
+                            ) : chat.lastAck >= 2 ? (
+                              <FaCheckDouble color="#888" />
+                            ) : (
+                              <FaCheck color="#888" />
+                            )
+                          ) : null}
+                        </span>
                       )}
                     </div>
                   </div>

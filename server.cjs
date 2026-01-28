@@ -13,6 +13,11 @@ app.use(express.json());
 // VPS DEPLOYMENT: Serve static files from 'dist' directory
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// Simple version endpoint to verify deployment version from browser
+app.get('/__version', (req, res) => {
+  res.json({ version: 'v1.2', time: Date.now() });
+});
+
 app.post('/translate', async (req, res) => {
     const { text, targetLang } = req.body;
     if (!text || !targetLang) {
@@ -82,6 +87,8 @@ const sessions = new Map();
 
 const dataDir = path.join(__dirname, 'data');
 const messageStoreFile = path.join(dataDir, 'messages.json');
+
+console.log('[Server] Starting... v1.2 - Optimized Sync & Timeouts');
 
 let messageStore = {};
 
@@ -160,14 +167,22 @@ const upsertMessages = (accountId, chatId, newMessages) => {
 
 // Helper to format chats for frontend
 const formatChats = (chats) => {
-  return chats.map(chat => ({
-    id: chat.id._serialized,
-    name: chat.name || chat.id.user,
-    message: chat.lastMessage ? chat.lastMessage.body : '',
-    time: chat.lastMessage ? new Date(chat.lastMessage.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-    unread: chat.unreadCount || 0,
-    avatarColor: '#128c7e' // Default WhatsApp color
-  }));
+  return chats.map(chat => {
+    const last = chat.lastMessage || {};
+    const lastTs = last.timestamp || last.t || 0;
+    const lastFromMe = !!(last.fromMe || (last.id && last.id.fromMe));
+    const lastAck = typeof last.ack === 'number' ? last.ack : 0;
+    return {
+      id: chat.id._serialized,
+      name: chat.name || chat.id.user,
+      message: last.body || '',
+      time: lastTs ? new Date(lastTs * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      unread: chat.unreadCount || 0,
+      avatarColor: '#128c7e',
+      lastFromMe,
+      lastAck
+    };
+  });
 };
 
 // Helper to reliably get the Puppeteer page
@@ -277,7 +292,9 @@ const getChatsWithFallback = async (client) => {
                              unreadCount: c.unreadCount,
                              lastMessage: lastMsg ? {
                                  body: lastMsg.body,
-                                 timestamp: lastMsg.t
+                                 timestamp: lastMsg.t,
+                                 fromMe: lastMsg.id && lastMsg.id.fromMe,
+                                 ack: typeof lastMsg.ack === 'number' ? lastMsg.ack : 0
                              } : null
                          };
                     });
@@ -796,8 +813,7 @@ io.on('connection', (socket) => {
               }))
           });
       } else {
-          // NEW: Emit empty list immediately to clear "Loading..." state on frontend
-          // The user will see an empty chat while we fetch fresh data in the background.
+          // Emit empty list immediately to clear "Loading..." on first open.
           console.log(`[Server] No stored messages for ${chatId}, sending empty list first to clear loading state.`);
           socket.emit('chat-messages', { 
               accountId, 
@@ -946,7 +962,7 @@ io.on('connection', (socket) => {
                     return { error: e.message };
                   }
                 }, chatId),
-                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 20000))
+                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 15000))
               ]);
 
               if (directResult && directResult.found) {
