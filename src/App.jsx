@@ -190,16 +190,6 @@ function App() {
     selectedChatIdRef.current = selectedChatId
   }, [selectedChatId])
 
-  const messagesEndRef = useRef(null)
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }
-
-  useEffect(() => {
-    scrollToBottom()
-  }, [activeChatMessages])
-
   const [chatFilter, setChatFilter] = useState(() => {
     return localStorage.getItem('chatFilter') || 'all'
   })
@@ -223,6 +213,17 @@ function App() {
   const [chatLanguages, setChatLanguages] = useState({})
   const [autoTranslate, setAutoTranslate] = useState({})
   const [showLangSelector, setShowLangSelector] = useState(false)
+
+  // Auto-scroll logic (Moved here to avoid TDZ)
+  const messagesEndRef = useRef(null)
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [activeChatMessages])
 
   // Persistence Effects
   useEffect(() => {
