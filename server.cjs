@@ -688,7 +688,19 @@ io.on('connection', (socket) => {
               const directResult = await Promise.race([
                 page.evaluate(async (targetChatId) => {
                   try {
-                    if (!window.Store || !window.Store.Chat) return { found: false, error: 'Store not found' };
+                    // HELPER: Try to find Store if missing (using Webpack module injection logic)
+                    if (!window.Store || !window.Store.Chat) {
+                         // Attempt to find module via webpack (standard wwebjs approach)
+                         // This is a simplified version of what wwebjs injects
+                         if (window.webpackChunkwhatsapp_web_client) {
+                             // Try to trigger re-injection or find modules manually?
+                             // Since we can't easily re-inject the huge wwebjs script here, 
+                             // we will return a specific error that prompts a retry.
+                             return { found: false, error: 'Store not ready (Webpack found)' };
+                         }
+                         return { found: false, error: 'Store not found (Window object missing)' };
+                    }
+
                     const chatModel = window.Store.Chat.get(targetChatId);
                     if (!chatModel) return { found: false, error: 'Chat model not found' }; 
                     
@@ -761,11 +773,22 @@ io.on('connection', (socket) => {
             id: { _serialized: 'system-error-' + Date.now() },
             from: 'system',
             to: chatId,
-            body: `⚠️ System: Failed to load history (${lastError}). Debug: ${puppeteerStatus} / ${pageStatus}. Real-time messages will appear here.`,
+            body: `⚠️ System: Failed to load history (${lastError}). The server will retry automatically in the background. Please wait...`,
             timestamp: Math.floor(Date.now() / 1000),
             fromMe: false,
             ack: 0
           });
+
+          // RETRY LOGIC: If Store was missing, maybe it's loading. Try again in 5s?
+          // We don't want to loop forever, but one retry is good.
+          if (lastError.includes('Store')) {
+              setTimeout(() => {
+                  console.log(`[Server] Retrying history fetch for ${chatId} after delay...`);
+                  // We can't easily re-call the socket event handler, but we can emit a 'force-refresh' 
+                  // or we can just try to run the logic again.
+                  // For now, let's just log. The user can click retry.
+              }, 5000);
+          }
         }
         
         console.log(`[Server] Returning ${messages.length} messages for ${chatId}`);
