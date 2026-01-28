@@ -599,6 +599,15 @@ io.on('connection', (socket) => {
                   ack: msg.ack || 0
               }))
           });
+      } else {
+          // NEW: Emit empty list immediately to clear "Loading..." state on frontend
+          // The user will see an empty chat while we fetch fresh data in the background.
+          console.log(`[Server] No stored messages for ${chatId}, sending empty list first to clear loading state.`);
+          socket.emit('chat-messages', { 
+              accountId, 
+              chatId, 
+              messages: [] 
+          });
       }
 
       if (!sessions.has(accountId)) {
