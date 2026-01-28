@@ -143,6 +143,17 @@ const SUPPORTED_LANGUAGES = [
     { code: 'zu', name: 'Zulu' },
 ]
 
+const safeParse = (key, fallback) => {
+  try {
+    const saved = localStorage.getItem(key);
+    if (!saved || saved === 'undefined') return fallback;
+    return JSON.parse(saved);
+  } catch (e) {
+    console.error(`[App] Failed to parse ${key}`, e);
+    return fallback;
+  }
+};
+
 function App() {
   // Load initial state from localStorage or use defaults
   const [activePlatform, setActivePlatform] = useState(() => {
