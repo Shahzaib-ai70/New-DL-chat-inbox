@@ -3,6 +3,8 @@
 **Goal:** Deploy "New-DL-chat-inbox" on your VPS separately from your existing project.
 **Method:** Run on a separate port (3002) and use the domain `dlchats.site`.
 
+---
+
 ## 🛑 Step 1: Safety Check (Run on VPS)
 
 Before doing anything, let's ensure Port 3002 is free so we don't conflict with your "Old Project".
@@ -41,7 +43,12 @@ mkdir -p /var/www/dlchats
 cd /var/www/dlchats
 
 # Clone the repository (use dot . to clone into current dir)
-git clone https://github.com/Shahzaib-ai70/New-DL-chat-inbox.git .
+# If directory is not empty, use git pull
+if [ -d ".git" ]; then
+    git pull origin main
+else
+    git clone https://github.com/Shahzaib-ai70/New-DL-chat-inbox.git .
+fi
 ```
 
 ### 2. Run Deployment Script
@@ -65,7 +72,7 @@ pm2 startup
 
 ## 🌐 Step 3: Connect Domain (dlchats.site)
 
-To make `dlchats.site` work, configure Nginx.
+**IMPORTANT:** Even if `http://72.60.236.77:3002` doesn't open (due to firewall), **this step will make it work** via the domain!
 
 1.  **Create Config:**
     ```bash
@@ -98,17 +105,19 @@ To make `dlchats.site` work, configure Nginx.
     systemctl restart nginx
     ```
 
-4.  **Enable SSL (HTTPS):**
-    ```bash
-    certbot --nginx -d dlchats.site -d www.dlchats.site
-    ```
-
 ---
 
-## 🔄 Updates
+## 🛠️ Troubleshooting
 
-To update the code in the future, just run:
+If your site is still not working, run this diagnostic tool on your VPS:
+
 ```bash
 cd /var/www/dlchats
-./deploy.sh
+chmod +x check-status.sh
+./check-status.sh
 ```
+
+**Common Fixes:**
+1.  **App not running?** Run `./deploy.sh` again.
+2.  **Nginx failed?** Check `nginx -t` for errors.
+3.  **Port 3002 blocked?** Nginx bypasses external firewalls, so Step 3 is the fix.
