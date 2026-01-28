@@ -399,6 +399,57 @@ const startPolling = (client, accountId) => {
     pollLoop();
 };
 
+const statusPolls = new Map();
+
+const startStatusPolling = (client, accountId, chatId) => {
+    if (!accountId || !chatId) return;
+    const key = accountId + '|' + chatId;
+    if (statusPolls.has(key)) return;
+    const state = { running: true, timer: null };
+    statusPolls.set(key, state);
+    const loop = async () => {
+        if (!state.running) return;
+        try {
+            const page = await getPage(client);
+            if (page) {
+                const status = await page.evaluate((cid) => {
+                    const result = { chatId: cid, typing: false, recording: false, online: false, lastSeen: null };
+                    try {
+                        if (!window.Store || !window.Store.Chat) return result;
+                        const chat = window.Store.Chat.get(cid);
+                        if (!chat) return result;
+                        const anyTrue = v => v === true;
+                        const typingKeys = ['isTyping','__x_isTyping','isComposing'];
+                        const recordKeys = ['isRecording','__x_isRecording'];
+                        const onlineKeys = ['isOnline','__x_isOnline'];
+                        const t = typingKeys.map(k => chat[k]).some(anyTrue);
+                        const r = recordKeys.map(k => chat[k]).some(anyTrue);
+                        let o = onlineKeys.map(k => chat[k]).some(anyTrue);
+                        if (!o) {
+                            const p = chat.presence || (chat.contact && chat.contact.presence);
+                            if (p) {
+                                o = !!(p.isOnline || p.__x_isOnline);
+                                const ls = p.lastSeen || p.__x_lastSeen;
+                                if (ls) result.lastSeen = Number(ls);
+                            }
+                        }
+                        result.typing = !!t;
+                        result.recording = !!r;
+                        result.online = !!o;
+                        if (!result.lastSeen && chat.lastSeen) result.lastSeen = Number(chat.lastSeen);
+                    } catch(e) {}
+                    return result;
+                }, chatId);
+                io.to(accountId).emit('chat-status', { accountId, ...status });
+            }
+        } catch(e) {}
+        if (state.running) {
+            state.timer = setTimeout(loop, 1000);
+        }
+    };
+    loop();
+};
+
 io.on('connection', (socket) => {
   console.log('Frontend connected');
 
@@ -575,6 +626,22 @@ io.on('connection', (socket) => {
         // We could emit a chat list update here
         // For now, let's just log. 
         // Ideally we should emit 'chat-update' to frontend if we had that logic.
+    });
+
+    socket.on('subscribe-chat-status', async ({ accountId, chatId }) => {
+        if (!sessions.has(accountId)) return;
+        const client = sessions.get(accountId);
+        startStatusPolling(client, accountId, chatId);
+    });
+
+    socket.on('unsubscribe-chat-status', async ({ accountId, chatId }) => {
+        const key = accountId + '|' + chatId;
+        if (statusPolls.has(key)) {
+            const s = statusPolls.get(key);
+            s.running = false;
+            if (s.timer) clearTimeout(s.timer);
+            statusPolls.delete(key);
+        }
     });
 
     socket.on('send-message', async ({ accountId, chatId, message }) => {
@@ -971,6 +1038,14 @@ io.on('connection', (socket) => {
                 state.running = false;
                 if (state.timer) clearTimeout(state.timer);
                 activePolls.delete(accountId);
+            }
+            for (const key of Array.from(statusPolls.keys())) {
+                if (key.startsWith(accountId + '|')) {
+                    const st = statusPolls.get(key);
+                    st.running = false;
+                    if (st.timer) clearTimeout(st.timer);
+                    statusPolls.delete(key);
+                }
             }
 
             const client = sessions.get(accountId);

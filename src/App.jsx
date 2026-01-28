@@ -213,6 +213,7 @@ function App() {
   const [chatLanguages, setChatLanguages] = useState({})
   const [autoTranslate, setAutoTranslate] = useState({})
   const [showLangSelector, setShowLangSelector] = useState(false)
+  const [chatStatus, setChatStatus] = useState({ typing: false, recording: false, online: false, lastSeen: null })
 
   // Auto-scroll logic (Moved here to avoid TDZ)
   const messagesEndRef = useRef(null)
@@ -570,6 +571,21 @@ function App() {
 
     return fetchMessages();
   }, [selectedChatId, selectedAccountId, socket]);
+
+  useEffect(() => {
+    if (!socket || !selectedAccountId || !selectedChatId) return
+    socket.emit('subscribe-chat-status', { accountId: selectedAccountId, chatId: selectedChatId })
+    const handler = (data) => {
+      if (data.accountId === selectedAccountId && data.chatId === selectedChatId) {
+        setChatStatus({ typing: !!data.typing, recording: !!data.recording, online: !!data.online, lastSeen: data.lastSeen || null })
+      }
+    }
+    socket.on('chat-status', handler)
+    return () => {
+      socket.off('chat-status', handler)
+      socket.emit('unsubscribe-chat-status', { accountId: selectedAccountId, chatId: selectedChatId })
+    }
+  }, [socket, selectedAccountId, selectedChatId])
 
   const handleChatClick = (chat) => {
     try {
@@ -970,8 +986,8 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', marginLeft: '10px' }}>
                       <div className="name">{selectedChat.name}</div>
-                      <div style={{ fontSize: '0.7em', color: socket && socket.connected ? '#25D366' : '#f00' }}>
-                          {socket && socket.connected ? '● Live' : '● Disconnected'}
+                      <div style={{ fontSize: '0.7em', color: (chatStatus.typing || chatStatus.recording || chatStatus.online) ? '#25D366' : (socket && socket.connected ? '#25D366' : '#f00') }}>
+                          {chatStatus.typing ? 'Typing…' : chatStatus.recording ? 'Recording…' : chatStatus.online ? 'Online' : (chatStatus.lastSeen ? `Last seen ${new Date(chatStatus.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : (socket && socket.connected ? '● Live' : '● Disconnected'))}
                       </div>
                   </div>
                   <div style={{ marginLeft: 'auto', position: 'relative', display: 'flex', alignItems: 'center' }}>
