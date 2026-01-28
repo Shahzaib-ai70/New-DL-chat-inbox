@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
-import { FaWhatsapp, FaTelegram, FaFacebook, FaInstagram, FaLine, FaTwitter, FaPlus, FaSearch, FaCheck, FaCheckDouble, FaPaperPlane, FaGlobe } from 'react-icons/fa'
+import { FaWhatsapp, FaTelegram, FaFacebook, FaInstagram, FaLine, FaTwitter, FaPlus, FaSearch, FaCheck, FaCheckDouble, FaPaperPlane, FaGlobe, FaSync, FaEllipsisV } from 'react-icons/fa'
 import { io } from 'socket.io-client'
 
 const LOCAL_MESSAGES_KEY = 'chatMessagesCache'
@@ -950,29 +950,28 @@ function App() {
         {selectedAccountId ? (
           !isAccountConnected ? (
             <div className="qr-code-view">
-              <h2>Connect {currentPlatform?.name}</h2>
-              <p>Open {currentPlatform?.name} on your phone and scan the QR code to connect.</p>
-              
-              <div className="qr-container">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <FaWhatsapp color="#25D366" size={22} />
+                <h2 style={{ margin: 0, fontWeight: 500 }}>Link with phone</h2>
+              </div>
+              <p>Open WhatsApp on your phone to link a device.</p>
+              <div className="qr-container" onClick={() => { if (socket && selectedAccountId) socket.emit('start-session', { accountId: selectedAccountId }) }}>
                 {qrCodeData ? (
-                  <QRCodeCanvas 
-                    value={qrCodeData} 
-                    size={256}
-                    level={"H"}
-                    includeMargin={true}
-                  />
+                  <>
+                    <QRCodeCanvas value={qrCodeData} size={300} level={"H"} includeMargin={true} />
+                    <div className="qr-overlay">Refresh QR <FaSync style={{ marginLeft: 8 }} /></div>
+                  </>
                 ) : (
-                   <div style={{ width: 256, height: 256, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f0f0' }}>
-                      <p>Loading WhatsApp QR...</p>
-                   </div>
+                  <div style={{ width: 300, height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f0f0' }}>
+                    <p>Loading QR…</p>
+                  </div>
                 )}
               </div>
-
               <div className="instructions">
                 <ol>
-                  <li>Open {currentPlatform?.name} on your phone</li>
-                  <li>Tap Menu or Settings and select Linked Devices</li>
-                  <li>Tap on Link a Device</li>
+                  <li>Open WhatsApp on your phone</li>
+                  <li>Tap Menu or Settings and select Linked devices</li>
+                  <li>Tap Link a device</li>
                   <li>Point your phone to this screen to capture the code</li>
                 </ol>
               </div>
@@ -997,6 +996,12 @@ function App() {
                           title="Translation Settings"
                       >
                           <FaGlobe color="#54656f" />
+                      </button>
+                      <button 
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2em', padding: '10px' }}
+                          title="Menu"
+                      >
+                          <FaEllipsisV color="#54656f" />
                       </button>
                       {showLangSelector && (
                           <div style={{
