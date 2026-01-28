@@ -190,6 +190,16 @@ function App() {
     selectedChatIdRef.current = selectedChatId
   }, [selectedChatId])
 
+  const messagesEndRef = useRef(null)
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [activeChatMessages])
+
   const [chatFilter, setChatFilter] = useState(() => {
     return localStorage.getItem('chatFilter') || 'all'
   })
@@ -957,7 +967,12 @@ function App() {
                   <div className="avatar" style={{ backgroundColor: selectedChat.avatarColor || '#cbd5e1' }}>
                      {(selectedChat.name || '?').charAt(0)}
                   </div>
-                  <div className="name">{selectedChat.name}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', marginLeft: '10px' }}>
+                      <div className="name">{selectedChat.name}</div>
+                      <div style={{ fontSize: '0.7em', color: socket && socket.connected ? '#25D366' : '#f00' }}>
+                          {socket && socket.connected ? '● Live' : '● Disconnected'}
+                      </div>
+                  </div>
                   <div style={{ marginLeft: 'auto', position: 'relative', display: 'flex', alignItems: 'center' }}>
                       <button 
                           onClick={() => setShowLangSelector(!showLangSelector)} 
@@ -1084,6 +1099,7 @@ function App() {
                         )
                       })
                    )}
+                   <div ref={messagesEndRef} />
                 </div>
 
                 <div className="chat-input-area">

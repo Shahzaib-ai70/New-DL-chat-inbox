@@ -397,11 +397,14 @@ io.on('connection', (socket) => {
             chatId = msg.fromMe ? msg.to : msg.from;
         }
 
-        console.log(`[Server] message_create event:`, {
+        // Validate chatId format (ensure it has a suffix)
+        if (chatId && !chatId.includes('@')) {
+             chatId = chatId + '@c.us'; // Default to contact if missing
+        }
+
+        console.log(`[Server] message_create event for account ${accountId}:`, {
             id: msg.id._serialized,
             body: msg.body,
-            from: msg.from,
-            to: msg.to,
             chatId: chatId,
             fromMe: msg.fromMe
         });
@@ -417,6 +420,7 @@ io.on('connection', (socket) => {
         };
         upsertMessages(accountId, chatId, [storedMessage]);
 
+        // EMIT TO FRONTEND
         io.to(accountId).emit('message', {
           accountId,
           chatId: chatId,
@@ -426,9 +430,12 @@ io.on('connection', (socket) => {
               to: msg.to,
               body: msg.body,
               timestamp: msg.timestamp,
-              fromMe: msg.fromMe
+              fromMe: msg.fromMe,
+              ack: msg.ack || 0
           }
         });
+        console.log(`[Server] Emitted 'message' to room ${accountId}`);
+
       } catch (e) {
         console.error('Error handling message_create:', e);
       }
