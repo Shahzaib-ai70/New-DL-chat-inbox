@@ -1,32 +1,28 @@
 # 🚀 Deployment Guide for dlchats.site
 
-**Goal:** Deploy "New-DL-chat-inbox" on your VPS alongside your existing project, without breaking anything.
-**Method:** Run on a separate port (3002) and use a Subdomain (e.g., `app.dlchats.site`).
+**Goal:** Deploy "New-DL-chat-inbox" on your VPS separately from your existing project.
+**Method:** Run on a separate port (3002) and use the domain `dlchats.site`.
 
 ## 🛑 Step 1: Safety Check (Run on VPS)
 
-Before doing anything, let's see what's running on your VPS so we don't break it.
+Before doing anything, let's ensure Port 3002 is free so we don't conflict with your "Old Project".
 SSH into your VPS (`ssh root@72.60.236.77`) and run:
 
 ```bash
 # Check if Port 3002 is free (it should be empty)
 lsof -i :3002
-
-# Check what web server you are using (Nginx or Apache)
-netstat -tulpn | grep :80
 ```
-*   If you see `nginx`, we will use the **Nginx Config** below.
-*   If you see `apache2`, we will use the **Apache Config**.
-*   If Port 3002 is busy, tell me, and we will change the port in `server.cjs`.
+*   If it returns nothing: **Great! Proceed.**
+*   If it shows a process: **STOP.** You need to change the port in `ecosystem.config.cjs` before deploying.
 
 ---
 
 ## 📦 Step 2: Install & Setup (Run on VPS)
 
-We will put this project in a **new folder** so it never touches your old project.
+We will put this project in a **new folder** (`/var/www/dlchats`) to keep it completely separate.
 
 ### ⚠️ Prerequisite: Install Chrome Dependencies
-Since this app uses Puppeteer (Chrome) for WhatsApp, you MUST install these system libraries on your VPS or the QR code won't load:
+This app uses Puppeteer (Chrome). You **MUST** run this once if you haven't before:
 ```bash
 sudo apt-get update
 sudo apt-get install -y ca-certificates fonts-liberation libasound2 \
@@ -38,96 +34,81 @@ libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 \
 lsb-release wget xdg-utils
 ```
 
-1.  **Go to your home directory:**
-    ```bash
-    cd ~
-    ```
+### 1. Create Directory & Clone
+```bash
+# Create new directory
+mkdir -p /var/www/dlchats
+cd /var/www/dlchats
 
-2.  **Clone your GitHub Repo:**
-    ```bash
-    git clone https://github.com/Shahzaib-ai70/New-DL-chat-inbox.git whatsapp-dashboard
-    cd whatsapp-dashboard
-    ```
+# Clone the repository (use dot . to clone into current dir)
+git clone https://github.com/Shahzaib-ai70/New-DL-chat-inbox.git .
+```
 
-3.  **Install & Start:**
-    ```bash
-    # Install dependencies
-    npm install
+### 2. Run Deployment Script
+I have updated `deploy.sh` to handle everything (install, build, permissions, persistence).
 
-    # Build the frontend
-    npm run build
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
 
-    # Start with PM2 (Name: whatsapp-v2)
-    pm2 start ecosystem.config.cjs
-    ```
+*This will start the server on Port 3002 with the name `dlchats-server`.*
 
-4.  **Save PM2 list** (so it restarts after reboot):
-    ```bash
-    pm2 save
-    pm2 startup
-    ```
-
-✅ **Your app is now running internally on Port 3002.**
+### 3. Save PM2 State
+To ensure it starts after reboot:
+```bash
+pm2 save
+pm2 startup
+```
 
 ---
 
 ## 🌐 Step 3: Connect Domain (dlchats.site)
 
-To access it without typing the port, we should use a **Subdomain** like `app.dlchats.site` or `bot.dlchats.site`.
+To make `dlchats.site` work, configure Nginx.
 
-**1. Create Subdomain (Hostinger Panel):**
-*   Go to Hostinger DNS Zone.
-*   Add an **A Record**:
-    *   Name: `app` (or whatever you want)
-    *   Target: `72.60.236.77`
+1.  **Create Config:**
+    ```bash
+    nano /etc/nginx/sites-available/dlchats.site
+    ```
 
-**2. Configure Web Server (VPS):**
+2.  **Paste Content:**
+    ```nginx
+    server {
+        server_name dlchats.site www.dlchats.site;
 
-### 👉 If you use NGINX (Most likely):
-Create a config file:
-```bash
-nano /etc/nginx/sites-available/whatsapp-dashboard
-```
-Paste this (Change `app.dlchats.site` to your actual subdomain):
-```nginx
-server {
-    listen 80;
-    server_name app.dlchats.site;
-
-    location / {
-        proxy_pass http://localhost:3002;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
+        location / {
+            proxy_pass http://localhost:3002;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection 'upgrade';
+            proxy_set_header Host $host;
+            proxy_cache_bypass $http_upgrade;
+        }
+        
+        # Increase upload size
+        client_max_body_size 50M;
     }
-}
-```
-Enable it:
-```bash
-ln -s /etc/nginx/sites-available/whatsapp-dashboard /etc/nginx/sites-enabled/
-nginx -t
-systemctl restart nginx
-```
+    ```
 
-### 👉 If you use APACHE:
-(Let me know if you use Apache, and I will give you the `.htaccess` or VirtualHost config).
+3.  **Enable & Restart:**
+    ```bash
+    ln -s /etc/nginx/sites-available/dlchats.site /etc/nginx/sites-enabled/
+    nginx -t
+    systemctl restart nginx
+    ```
+
+4.  **Enable SSL (HTTPS):**
+    ```bash
+    certbot --nginx -d dlchats.site -d www.dlchats.site
+    ```
 
 ---
 
-## 🔄 Step 4: Automatic Updates (The "GitHub Always" part)
+## 🔄 Updates
 
-I have included a `deploy.sh` file. Whenever you push changes to GitHub, just do this on VPS:
-
-1.  **Make it executable (First time only):**
-    ```bash
-    cd ~/whatsapp-dashboard
-    chmod +x deploy.sh
-    ```
-
-2.  **Run it whenever you want to update:**
-    ```bash
-    ./deploy.sh
-    ```
-*It will pull the new code, rebuild, and restart automatically.*
+To update the code in the future, just run:
+```bash
+cd /var/www/dlchats
+./deploy.sh
+```

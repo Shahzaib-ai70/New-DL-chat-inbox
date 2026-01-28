@@ -17,7 +17,9 @@ npm install
 # 2.5 Ensure Data Directory Persistence
 echo "💾 configuring data persistence..."
 mkdir -p data
+mkdir -p .wwebjs_auth
 chmod -R 777 data
+chmod -R 777 .wwebjs_auth
 
 # 3. Build the React Frontend
 echo "🏗️ Building React Frontend..."

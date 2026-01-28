@@ -1,6 +1,6 @@
 module.exports = {
   apps: [{
-    name: "whatsapp-dashboard-v2",
+    name: "dlchats-server",
     script: "./server.cjs",
     instances: 1,
     autorestart: true,
