@@ -150,20 +150,18 @@ function App() {
   })
 
   const [lists, setLists] = useState(() => {
-    const saved = localStorage.getItem('lists')
-    return saved ? JSON.parse(saved) : {
+    return safeParse('lists', {
       whatsapp: [],
       telegram: [],
       facebook: [],
       instagram: [],
       line: [],
       twitter: []
-    }
+    })
   })
 
   const [selectedAccountId, setSelectedAccountId] = useState(() => {
-    const saved = localStorage.getItem('selectedAccountId')
-    return saved ? JSON.parse(saved) : null
+    return safeParse('selectedAccountId', null)
   })
 
   const [selectedChatId, setSelectedChatId] = useState(() => {
@@ -190,8 +188,7 @@ function App() {
   const [socket, setSocket] = useState(null)
 
   const [chats, setChats] = useState(() => {
-    const saved = localStorage.getItem('chats')
-    return saved ? JSON.parse(saved) : {}
+    return safeParse('chats', {})
   })
 
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, accountId: null })
