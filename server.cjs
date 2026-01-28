@@ -363,6 +363,7 @@ io.on('connection', (socket) => {
       try {
         const formattedChats = await getChatsWithFallback(client);
         if (formattedChats && formattedChats.length > 0) {
+            updateStoredChats(accountId, formattedChats); // Persist updated list
             io.to(accountId).emit('chat-list', { accountId, chats: formattedChats });
         } else {
             console.warn(`[Server] Fetched 0 chats on ready for ${accountId}, skipping emission.`);
