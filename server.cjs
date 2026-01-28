@@ -296,64 +296,73 @@ const getChatsWithFallback = async (client) => {
     return [];
 };
 
-// NEW: Background Polling Mechanism to ensure live updates
-const activePolls = new Map(); // accountId -> intervalId
+// NEW: Background Polling Mechanism to ensure live updates (Recursive & Optimized)
+const activePolls = new Map(); // accountId -> { running: boolean, timer: timeoutId }
 
 const startPolling = (client, accountId) => {
     if (activePolls.has(accountId)) return;
 
-    console.log(`[Server] Starting background polling for ${accountId} (3s interval)`);
-    const interval = setInterval(async () => {
-        const page = await getPage(client);
-        if (!page) return;
+    console.log(`[Server] Starting background polling for ${accountId} (Recursive Strategy)`);
+    
+    const state = { running: true, timer: null };
+    activePolls.set(accountId, state);
+
+    const pollLoop = async () => {
+        if (!state.running) return;
 
         try {
-            // Check for new messages in ALL chats
-            const recentMessages = await page.evaluate(() => {
-                if (!window.Store || !window.Store.Chat) return [];
-                
-                // Get all chats
-                const chats = window.Store.Chat.models;
-                const results = [];
-                
-                chats.forEach(chat => {
-                    // Check last message
-                    if (chat.msgs && chat.msgs.length > 0) {
-                        const lastMsg = chat.msgs.models[chat.msgs.models.length - 1];
-                        if (lastMsg) {
-                            results.push({
-                                id: lastMsg.id._serialized,
-                                from: lastMsg.from,
-                                to: lastMsg.to,
-                                body: lastMsg.body,
-                                timestamp: lastMsg.t,
-                                fromMe: lastMsg.id.fromMe,
-                                ack: lastMsg.ack,
-                                chatId: chat.id._serialized,
-                                chatName: chat.name || chat.formattedTitle || chat.contact.name || chat.id.user,
-                                unreadCount: chat.unreadCount
+            const page = await getPage(client);
+            if (page) {
+                // Check for new messages in TOP 20 chats (Optimized for performance)
+                const recentMessages = await page.evaluate(() => {
+                    if (!window.Store || !window.Store.Chat) return [];
+                    
+                    // Get all chats and sort by timestamp (descending) to find active ones
+                    const chats = window.Store.Chat.models;
+                    const sortedChats = [...chats].sort((a, b) => (b.t || 0) - (a.t || 0));
+                    
+                    // Only scan top 20 chats to avoid blocking the thread
+                    const topChats = sortedChats.slice(0, 20);
+                    const results = [];
+                    
+                    topChats.forEach(chat => {
+                        if (chat.msgs && chat.msgs.length > 0) {
+                            // Get last 5 messages to ensure we don't miss rapid-fire updates
+                            const slice = chat.msgs.models.slice(-5);
+                            
+                            slice.forEach(msg => {
+                                if (!msg) return;
+                                results.push({
+                                    id: msg.id._serialized,
+                                    from: msg.from,
+                                    to: msg.to,
+                                    body: msg.body,
+                                    timestamp: msg.t,
+                                    fromMe: msg.id.fromMe,
+                                    ack: msg.ack,
+                                    chatId: chat.id._serialized,
+                                    chatName: chat.name || chat.formattedTitle || chat.contact.name || chat.id.user,
+                                    unreadCount: chat.unreadCount
+                                });
                             });
                         }
-                    }
+                    });
+                    return results;
                 });
-                return results;
-            });
 
-            // Process results on server side
-            let hasUpdates = false;
-            recentMessages.forEach(msg => {
-                const stored = getStoredMessages(accountId, msg.chatId);
-                const lastStored = stored.length > 0 ? stored[stored.length - 1] : null;
+                // Process results on server side
+                let hasUpdates = false;
                 
-                // If we don't have this message, or it's newer than our last stored one
-                const isNew = !lastStored || (msg.timestamp > (lastStored.timestamp || 0) && msg.id !== lastStored.id);
-                
-                if (isNew) {
-                    // Check if it's really not in our list (double check by ID)
+                // Sort by timestamp to process in order
+                recentMessages.sort((a, b) => a.timestamp - b.timestamp);
+
+                recentMessages.forEach(msg => {
+                    const stored = getStoredMessages(accountId, msg.chatId);
+                    
+                    // Check if we already have this message ID
                     const exists = stored.some(m => m.id === msg.id);
+                    
                     if (!exists) {
-                        console.log(`[Server] Polling found NEW message: ${msg.id} in ${msg.chatId}`);
-                        
                         const msgObj = {
                             id: msg.id,
                             from: msg.from,
@@ -374,36 +383,20 @@ const startPolling = (client, accountId) => {
                         });
                         hasUpdates = true;
                     }
-                }
-            });
+                });
 
-            // If we found new messages, we should probably update the chat list too
-            // to reflect new timestamps/last messages/unread counts
-            if (hasUpdates) {
-                 // We can emit a partial update or just re-fetch the chat list
-                 // Let's just emit the chat list update based on the polled data
-                 // The polled data already contains enough info for the chat list
-                 const chatList = recentMessages.map(msg => ({
-                    id: msg.chatId,
-                    name: msg.chatName,
-                    message: msg.body,
-                    time: new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    unread: msg.unreadCount || 0,
-                    avatarColor: '#128c7e'
-                 }));
-                 // We need to merge this with existing chat list to not lose chats that have no messages?
-                 // Actually getChatsWithFallback does a full fetch. 
-                 // Let's rely on the client to update the chat list based on the 'message' event for now,
-                 // OR we can periodically emit 'chat-list' if we want to be safe.
-                 // For now, the 'message' event should trigger the UI to update the chat preview.
             }
-
         } catch (e) {
             // console.warn('[Server] Polling error:', e.message);
         }
-    }, 3000); // Poll every 3 seconds
 
-    activePolls.set(accountId, interval);
+        // Schedule next poll only after current one finishes (prevents overlap)
+        if (state.running) {
+            state.timer = setTimeout(pollLoop, 1500); // Poll every 1.5 seconds
+        }
+    };
+
+    pollLoop();
 };
 
 io.on('connection', (socket) => {
@@ -966,7 +959,9 @@ io.on('connection', (socket) => {
             
             // Stop polling
             if (activePolls.has(accountId)) {
-                clearInterval(activePolls.get(accountId));
+                const state = activePolls.get(accountId);
+                state.running = false;
+                if (state.timer) clearTimeout(state.timer);
                 activePolls.delete(accountId);
             }
 
