@@ -165,7 +165,7 @@ const formatChats = (chats) => {
     name: chat.name || chat.id.user,
     message: chat.lastMessage ? chat.lastMessage.body : '',
     time: chat.lastMessage ? new Date(chat.lastMessage.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-    unread: chat.unreadCount,
+    unread: chat.unreadCount || 0,
     avatarColor: '#128c7e' // Default WhatsApp color
   }));
 };

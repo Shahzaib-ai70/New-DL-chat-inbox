@@ -406,13 +406,23 @@ function App() {
                     message: data.message.body,
                     time: new Date(data.message.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     // If it's the active chat OR it's my message, reset/keep unread 0. Otherwise increment.
-                    unread: (selectedChatIdRef.current === data.chatId || isFromMe) ? 0 : (chat.unread + 1)
+                    unread: (selectedChatIdRef.current === data.chatId || isFromMe) ? 0 : ((chat.unread || 0) + 1)
                   };
                   newAccountChats.splice(chatIndex, 1);
                   newAccountChats.unshift(updatedChat);
-               } 
-               // Note: If chat doesn't exist (new conversation), we might want to fetch chats again or add it.
-               // For now, we only update existing chats to avoid complexity with missing metadata.
+               } else {
+                   // Handle new conversation
+                   console.log('[App] New chat detected:', data.chatId);
+                   const newChat = {
+                       id: data.chatId,
+                       name: data.chatId.replace(/@.+/, ''), // Fallback name
+                       message: data.message.body,
+                       time: new Date(data.message.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                       unread: isFromMe ? 0 : 1,
+                       avatarColor: '#128c7e'
+                   };
+                   newAccountChats.unshift(newChat);
+               }
                
                return {
                  ...prev,
@@ -696,11 +706,22 @@ function App() {
              // Move to top
              newAccountChats.splice(chatIndex, 1);
              newAccountChats.unshift(updatedChat);
+             return { ...prev, [selectedAccountId]: newAccountChats };
         }
-        return prev; // Defer to real update on ACK
+        return prev; 
     });
 
-    socket.emit('send-message', { accountId: selectedAccountId, chatId: activeChat.id, message: messageInput });
+    try {
+        if (!socket || !socket.connected) {
+             throw new Error('Socket not connected');
+        }
+        socket.emit('send-message', { accountId: selectedAccountId, chatId: activeChat.id, message: messageInput });
+    } catch (err) {
+        console.error('[App] Send failed:', err);
+        alert('Failed to send message: Connection error. Please refresh.');
+        // Revert optimistic update?
+        setActiveChatMessages(prev => prev.filter(m => m.id !== tempMessage.id));
+    }
     setMessageInput('');
   };
 
