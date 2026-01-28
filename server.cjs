@@ -508,6 +508,15 @@ io.on('connection', (socket) => {
                 console.log('[Server] Attempting Direct Store Injection fallback for sending...');
                 try {
                     const fallbackResult = await client.pupPage.evaluate(async (targetChatId, msgContent) => {
+                        // Wait for Store
+                        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+                        let attempts = 0;
+                        while ((!window.Store || !window.Store.Chat) && attempts < 20) { 
+                            await sleep(100);
+                            attempts++;
+                        }
+                        
+                        if (!window.Store || !window.Store.Chat) return false;
                         const chat = window.Store.Chat.get(targetChatId);
                         if (chat && chat.sendMessage) {
                             await chat.sendMessage(msgContent);
@@ -556,6 +565,13 @@ io.on('connection', (socket) => {
                 return;
             }
             await page.evaluate(async (targetChatId) => {
+                // Wait for Store
+                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+                let attempts = 0;
+                while ((!window.Store || !window.Store.Chat) && attempts < 20) { 
+                    await sleep(100);
+                    attempts++;
+                }
                 if (!window.Store || !window.Store.Chat) return;
                 const chat = window.Store.Chat.get(targetChatId);
                 if (!chat) return;
@@ -688,6 +704,15 @@ io.on('connection', (socket) => {
               const directResult = await Promise.race([
                 page.evaluate(async (targetChatId) => {
                   try {
+                    // RETRY MECHANISM: Wait for Store to be available (up to 5s)
+                    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+                    let attempts = 0;
+                    // Wait for window.Store to be defined
+                    while ((!window.Store || !window.Store.Chat) && attempts < 50) { 
+                        await sleep(100);
+                        attempts++;
+                    }
+
                     // HELPER: Try to find Store if missing (using Webpack module injection logic)
                     if (!window.Store || !window.Store.Chat) {
                          // Attempt to find module via webpack (standard wwebjs approach)
@@ -733,7 +758,7 @@ io.on('connection', (socket) => {
                     return { error: e.message };
                   }
                 }, chatId),
-                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 10000))
+                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 15000))
               ]);
 
               if (directResult && directResult.found) {
