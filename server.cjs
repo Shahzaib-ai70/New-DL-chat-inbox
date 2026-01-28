@@ -175,17 +175,13 @@ const getPage = async (client) => {
     // 1. Try cached page first
     if (client.pupPage) {
         try {
-            // Fast check if page is still alive
-            if (client.pupPage.isClosed && client.pupPage.isClosed()) {
-                 console.log('[Server] Cached page is closed, discarding.');
-                 client.pupPage = null;
-            } else {
-                 await client.pupPage.evaluate(() => 1);
-                 return client.pupPage;
-            }
+            // Check if page is still valid
+            await client.pupPage.evaluate(() => 1);
+            // If valid, check if it's the right one (has Store or correct URL)
+            const isGood = await client.pupPage.evaluate(() => (window.Store && window.Store.Chat) || window.location.href.includes('web.whatsapp.com'));
+            if (isGood) return client.pupPage;
         } catch (e) {
-            console.warn('[Server] Cached page check failed:', e.message);
-            client.pupPage = null; 
+            client.pupPage = null; // Page crashed or closed
         }
     }
     
@@ -207,28 +203,32 @@ const getPage = async (client) => {
             const pages = await client.pupBrowser.pages();
             console.log(`[Server] Scanning ${pages.length} pages for window.Store...`);
             
+            // Priority 1: Page with Store ready
             for (const page of pages) {
                 try {
-                    // Check for Store AND Chat model to be sure it's the main app
-                    const hasStore = await page.evaluate(() => {
-                        return typeof window !== 'undefined' && 
-                               window.Store && 
-                               window.Store.Chat;
-                    });
-                    
+                    const hasStore = await page.evaluate(() => window.Store && window.Store.Chat);
                     if (hasStore) {
                         console.log('[Server] Found page with window.Store');
                         client.pupPage = page;
                         return page;
                     }
-                } catch (e) {
-                    // Ignore errors on pages we can't access
-                }
+                } catch (e) {}
             }
             
-            // If scanning failed, try the first one as last resort (often the main one)
+            // Priority 2: Page with correct URL
+            for (const page of pages) {
+                try {
+                    if (page.url().includes('web.whatsapp.com')) {
+                         console.log('[Server] Found page with correct URL (Store pending)');
+                         client.pupPage = page;
+                         return page;
+                    }
+                } catch(e) {}
+            }
+            
+            // Priority 3: Default to first page
             if (pages.length > 0) {
-                console.log('[Server] No page with Store found, defaulting to first page');
+                console.log('[Server] No specific page found, defaulting to first page');
                 client.pupPage = pages[0];
                 return pages[0];
             }
@@ -290,6 +290,7 @@ const getChatsWithFallback = async (client) => {
             return formatChats(rawChats); // Reuse formatter since we matched the structure
         } catch (e) {
             console.error('[Server] Puppeteer chat list fallback failed:', e);
+            client.pupPage = null;
         }
     }
     return [];
@@ -511,7 +512,7 @@ io.on('connection', (socket) => {
                         // Wait for Store
                         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
                         let attempts = 0;
-                        while ((!window.Store || !window.Store.Chat) && attempts < 20) { 
+                        while ((!window.Store || !window.Store.Chat) && attempts < 50) { 
                             await sleep(100);
                             attempts++;
                         }
@@ -704,11 +705,11 @@ io.on('connection', (socket) => {
               const directResult = await Promise.race([
                 page.evaluate(async (targetChatId) => {
                   try {
-                    // RETRY MECHANISM: Wait for Store to be available (up to 5s)
+                    // RETRY MECHANISM: Wait for Store to be available (up to 10s)
                     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
                     let attempts = 0;
                     // Wait for window.Store to be defined
-                    while ((!window.Store || !window.Store.Chat) && attempts < 50) { 
+                    while ((!window.Store || !window.Store.Chat) && attempts < 100) { 
                         await sleep(100);
                         attempts++;
                     }
@@ -758,7 +759,7 @@ io.on('connection', (socket) => {
                     return { error: e.message };
                   }
                 }, chatId),
-                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 15000))
+                new Promise((_, r) => setTimeout(() => r(new Error('Direct Store Timeout')), 20000))
               ]);
 
               if (directResult && directResult.found) {
@@ -778,10 +779,15 @@ io.on('connection', (socket) => {
                 console.log(`[Server] Strategy 2 Success: Synced ${directResult.messages.length} new messages. Total: ${messages.length}`);
               } else {
                 lastError = (directResult && directResult.error) ? directResult.error : 'Direct Store failed';
+                if (lastError.includes('Store not found') || lastError.includes('Window object missing')) {
+                    console.log('[Server] Invalidating cached page due to missing Store/Window');
+                    client.pupPage = null;
+                }
               }
             } catch (e) {
               console.warn(`[Server] Strategy 2 evaluate failed: ${e.message}`);
               lastError = e.message;
+              client.pupPage = null;
             }
           } else {
             lastError = 'Puppeteer page / Store not available';
